@@ -1,6 +1,6 @@
 //
 //  BoneToastTestView.swift
-//  MarketKit
+//  BoneToast
 //
 //  Copyright © 2025 Allogy Interactive. All rights reserved.
 //
@@ -8,7 +8,7 @@
 import SwiftUI
 
 /// A test view for exercising BoneToast functionality
-struct BoneToastTestView: View {
+public struct BoneToastTestView: View {
 	@Environment(\.dismiss) private var dismiss
 
 	// MARK: - Configuration State
@@ -16,12 +16,12 @@ struct BoneToastTestView: View {
 	@State private var useManager: Bool = false
 
 	/// Presentation mode options for testing
-	enum TestPresentationMode: String, CaseIterable {
+	public enum TestPresentationMode: String, CaseIterable {
 		case global = "Global"
 		case scoped = "Scoped (Overlay)"
 
-		var isGlobal: Bool { self == .global }
-		var isScoped: Bool { self == .scoped }
+		public var isGlobal: Bool { self == .global }
+		public var isScoped: Bool { self == .scoped }
 	}
 	@State private var positionOption: PositionOption = .defaultTop
 	@State private var pinningStyle: BoneToast.Pinning = .none
@@ -47,7 +47,7 @@ struct BoneToastTestView: View {
 	// MARK: - Manager
 	@State private var toastManager: BoneToastManager?
 
-	enum AnimationStyleOption: String, CaseIterable {
+	public enum AnimationStyleOption: String, CaseIterable {
 		case bounce = "Bounce"
 		case slide = "Slide"
 		case scale = "Scale"
@@ -57,7 +57,7 @@ struct BoneToastTestView: View {
 		case pop = "Pop"
 		case snappy = "Snappy"
 
-		var animationConfig: BoneToast.AnimationConfig {
+		public var animationConfig: BoneToast.AnimationConfig {
 			switch self {
 			case .bounce: .bounce
 			case .slide: .slide
@@ -71,12 +71,12 @@ struct BoneToastTestView: View {
 		}
 	}
 
-	enum CornerStyleOption: String, CaseIterable {
+	public enum CornerStyleOption: String, CaseIterable {
 		case adaptive = "Adaptive"
 		case capsule = "Capsule"
 		case roundedRect = "Rounded (28pt)"
 
-		var style: BoneToast.CornerStyle? {
+		public var style: BoneToast.CornerStyle? {
 			switch self {
 				case .adaptive: nil
 				case .capsule: .capsule
@@ -85,13 +85,13 @@ struct BoneToastTestView: View {
 		}
 	}
 
-	enum BackgroundStyleOption: String, CaseIterable {
+	public enum BackgroundStyleOption: String, CaseIterable {
 		case glass = "Glass"
 		case glassClear = "Glass (Clear)"
 		case solid = "Solid"
 		case solidNoBorder = "Solid (No Border)"
 
-		func backgroundStyle(tintColor: Color?) -> BoneToast.BackgroundStyle {
+		public func backgroundStyle(tintColor: Color?) -> BoneToast.BackgroundStyle {
 			switch self {
 			case .glass:
 				if let tintColor {
@@ -109,27 +109,27 @@ struct BoneToastTestView: View {
 		}
 	}
 
-	enum PositionOption: String, CaseIterable {
+	public enum PositionOption: String, CaseIterable {
 		case defaultTop = "Default (Top)"
 		case defaultBottom = "Default (Bottom)"
 		case forceTop = "Force Top"
 		case forceBottom = "Force Bottom"
 
-		var managerDefault: BoneToast.Position {
+		public var managerDefault: BoneToast.Position {
 			switch self {
 				case .defaultTop, .forceTop: .top
 				case .defaultBottom, .forceBottom: .bottom
 			}
 		}
 
-		var isForced: Bool {
+		public var isForced: Bool {
 			switch self {
 				case .forceTop, .forceBottom: true
 				case .defaultTop, .defaultBottom: false
 			}
 		}
 
-		var forcedPosition: BoneToast.Position? {
+		public var forcedPosition: BoneToast.Position? {
 			switch self {
 				case .forceTop: .top
 				case .forceBottom: .bottom
@@ -138,7 +138,9 @@ struct BoneToastTestView: View {
 		}
 	}
 
-	var body: some View {
+	public init() {}
+
+	public var body: some View {
 		NavigationStack {
 			Form {
 				configurationSection
