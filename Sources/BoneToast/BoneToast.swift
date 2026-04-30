@@ -6,6 +6,9 @@
 //
 
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - BoneToast Namespace
 
@@ -25,26 +28,94 @@ public enum BoneToast {
 		case none
 		case systemDefault
 		case custom(EdgeInsets)
-		
+
 		public static func all(_ value: CGFloat) -> BoneToast.Padding {
 			.custom(EdgeInsets(top: value, leading: value, bottom: value, trailing: value))
 		}
-		
+
 		public static func horizontal(_ value: CGFloat) -> BoneToast.Padding {
 			.custom(EdgeInsets(top: 0, leading: value, bottom: 0, trailing: value))
 		}
-		
+
 		public static func vertical(_ value: CGFloat) -> BoneToast.Padding {
 			.custom(EdgeInsets(top: value, leading: 0, bottom: value, trailing: 0))
 		}
-		
+
 		public static func edges(top: CGFloat = 0, leading: CGFloat = 0, bottom: CGFloat = 0, trailing: CGFloat = 0) -> BoneToast.Padding {
 			.custom(EdgeInsets(top: top, leading: leading, bottom: bottom, trailing: trailing))
 		}
+
+		/// Sum of leading + trailing insets. `.systemDefault` resolves to 16+16; `.none` to 0.
+		public var horizontalTotal: CGFloat {
+			switch self {
+				case .none: return 0
+				case .systemDefault: return 32
+				case .custom(let insets): return insets.leading + insets.trailing
+			}
+		}
 	}
+
+	/// Fallback scene width used by adaptive corner-style and dismiss-delay calculations
+	/// when no live scene width is available. Sized for a typical iPhone in portrait.
+	public static let defaultSceneWidth: CGFloat = 393
 	
+	// MARK: - Font
+
+	/// A `UIFont`-backed font wrapper used by toast text and action buttons.
+	///
+	/// Backed by `UIFont` so the framework can perform render-time text measurement (used for
+	/// adaptive corner-style selection and dismiss-delay calculation). Provides a derived
+	/// `swiftUIFont` for use in SwiftUI `Text`.
+	public struct Font: Sendable, Equatable {
+		public let uiFont: UIFont
+
+		/// SwiftUI `Font` derived from the underlying `UIFont`.
+		public var swiftUIFont: SwiftUI.Font { SwiftUI.Font(uiFont) }
+
+		/// Wrap an arbitrary `UIFont`.
+		public init(_ uiFont: UIFont) {
+			self.uiFont = uiFont
+		}
+
+		/// System font with the given size, weight, and design.
+		public static func system(
+			size: CGFloat,
+			weight: SwiftUI.Font.Weight = .regular,
+			design: SwiftUI.Font.Design = .default
+		) -> Self {
+			let base = UIFont.systemFont(ofSize: size, weight: weight.uiFontWeight)
+			if design == .default {
+				return Self(base)
+			}
+			let descriptor = base.fontDescriptor.withDesign(design.uiFontDescriptorDesign) ?? base.fontDescriptor
+			return Self(UIFont(descriptor: descriptor, size: size))
+		}
+
+		/// Custom font by PostScript name. Falls back to system font of the same size if unavailable.
+		public static func custom(_ name: String, size: CGFloat) -> Self {
+			Self(UIFont(name: name, size: size) ?? .systemFont(ofSize: size))
+		}
+
+		/// Dynamic Type style with optional weight override.
+		public static func textStyle(
+			_ style: UIFont.TextStyle,
+			weight: UIFont.Weight? = nil
+		) -> Self {
+			let base = UIFont.preferredFont(forTextStyle: style)
+			guard let weight else { return Self(base) }
+			let descriptor = base.fontDescriptor.addingAttributes([
+				.traits: [UIFontDescriptor.TraitKey.weight: weight.rawValue]
+			])
+			return Self(UIFont(descriptor: descriptor, size: base.pointSize))
+		}
+
+		public static func == (lhs: Self, rhs: Self) -> Bool {
+			lhs.uiFont.isEqual(rhs.uiFont)
+		}
+	}
+
 	// MARK: - Corner Style
-	
+
 	public enum CornerStyle: Equatable, Sendable {
 		case capsule
 		case roundedRect(cornerRadius: CGFloat)
@@ -214,20 +285,33 @@ public enum BoneToast {
 	public struct ActionButton: Sendable {
 		public let contentBuilder: @MainActor @Sendable () -> AnyView
 		public let action: @MainActor @Sendable () -> Void
-		
+
 		// Styling
 		public let backgroundStyle: BoneToast.BackgroundStyle?
 		public let fontColor: Color?
-		public let font: Font
+		public let font: BoneToast.Font
 		public let shape: BoneToast.ButtonShape
 		public let contentPadding: EdgeInsets
-		
+
 		// Size constraints
 		public let minWidth: CGFloat?
 		public let maxWidth: CGFloat?
-		
+
+		/// Measured width of the button's intrinsic content (text or symbol) plus horizontal content padding.
+		/// `nil` for the ViewBuilder initializer where the content can't be introspected — callers should
+		/// supply `minWidth` / `maxWidth` for accurate width estimation in that case.
+		internal let intrinsicContentWidth: CGFloat?
+
+		/// Best estimate of the button's rendered width, clamped by `minWidth` / `maxWidth`.
+		/// Falls back to `minWidth ?? 60` when intrinsic content width is unavailable.
+		internal var resolvedWidth: CGFloat {
+			let intrinsic = intrinsicContentWidth ?? (minWidth ?? 60)
+			let withMin = max(intrinsic, minWidth ?? 0)
+			return min(withMin, maxWidth ?? .greatestFiniteMagnitude)
+		}
+
 		// MARK: - Primary Initializer (ViewBuilder)
-		
+
 		/// Creates an action button with custom content.
 		///
 		/// - Parameters:
@@ -244,7 +328,7 @@ public enum BoneToast {
 			action: @escaping @MainActor @Sendable () -> Void,
 			backgroundStyle: BoneToast.BackgroundStyle? = nil,
 			fontColor: Color? = nil,
-			font: Font = .system(size: 14, weight: .semibold),
+			font: BoneToast.Font = .system(size: 14, weight: .semibold),
 			shape: BoneToast.ButtonShape = .capsule,
 			contentPadding: EdgeInsets = EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12),
 			minWidth: CGFloat? = 60,
@@ -260,10 +344,11 @@ public enum BoneToast {
 			self.contentPadding = contentPadding
 			self.minWidth = minWidth
 			self.maxWidth = maxWidth
+			self.intrinsicContentWidth = nil
 		}
-		
+
 		// MARK: - Convenience Initializer (Title String)
-		
+
 		/// Creates an action button with a text title.
 		///
 		/// - Parameters:
@@ -281,7 +366,7 @@ public enum BoneToast {
 			action: @escaping @MainActor @Sendable () -> Void,
 			backgroundStyle: BoneToast.BackgroundStyle? = nil,
 			fontColor: Color? = nil,
-			font: Font = .system(size: 14, weight: .semibold),
+			font: BoneToast.Font = .system(size: 14, weight: .semibold),
 			shape: BoneToast.ButtonShape = .capsule,
 			contentPadding: EdgeInsets = EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12),
 			minWidth: CGFloat? = 60,
@@ -292,7 +377,7 @@ public enum BoneToast {
 			self.contentBuilder = {
 				AnyView(
 					Text(title)
-						.font(resolvedFont)
+						.font(resolvedFont.swiftUIFont)
 						.foregroundColor(resolvedFontColor)
 				)
 			}
@@ -304,10 +389,12 @@ public enum BoneToast {
 			self.contentPadding = contentPadding
 			self.minWidth = minWidth
 			self.maxWidth = maxWidth
+			let textWidth = BoneTextMeasurement.singleLineWidth(text: title, uiFont: font.uiFont)
+			self.intrinsicContentWidth = textWidth + contentPadding.leading + contentPadding.trailing
 		}
-		
+
 		// MARK: - Convenience Initializer (SF Symbol)
-		
+
 		/// Creates an action button with an SF Symbol icon.
 		///
 		/// - Parameters:
@@ -327,7 +414,7 @@ public enum BoneToast {
 			backgroundStyle: BoneToast.BackgroundStyle? = nil,
 			fontColor: Color? = nil,
 			symbolSize: CGFloat = 12,
-			symbolWeight: Font.Weight = .semibold,
+			symbolWeight: SwiftUI.Font.Weight = .semibold,
 			shape: BoneToast.ButtonShape = .circle,
 			contentPadding: EdgeInsets = EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8),
 			minWidth: CGFloat? = nil,
@@ -349,6 +436,7 @@ public enum BoneToast {
 			self.contentPadding = contentPadding
 			self.minWidth = minWidth
 			self.maxWidth = maxWidth
+			self.intrinsicContentWidth = symbolSize + contentPadding.leading + contentPadding.trailing
 		}
 	}
 	
@@ -357,68 +445,61 @@ public enum BoneToast {
 	/// Configuration for toast text content including title, optional subtitle, and styling
 	public struct TextConfig: Sendable {
 		public let title: String
-		public let titleFont: Font
+		public let titleFont: BoneToast.Font
 		public let titleColor: Color?
 		public let titleLineLimit: Int?
-		
+
 		public let subtitle: String?
-		public let subtitleFont: Font
+		public let subtitleFont: BoneToast.Font
 		public let subtitleColor: Color?
 		public let subtitleLineLimit: Int?
-		
+
 		public let alignment: BoneToast.TextAlignment
-		
-		/// Estimated characters per line for title (based on typical toast width and font size)
-		private static let titleCharsPerLine: Int = 35
-		
-		/// Estimated characters per line for subtitle (smaller font = more chars)
-		private static let subtitleCharsPerLine: Int = 45
-		
+
 		/// Effective line limit for SwiftUI (converts 0 or nil to nil for unlimited)
 		public var effectiveTitleLineLimit: Int? {
 			guard let limit = titleLineLimit, limit > 0 else { return nil }
 			return limit
 		}
-		
+
 		/// Effective line limit for SwiftUI (converts 0 or nil to nil for unlimited)
 		public var effectiveSubtitleLineLimit: Int? {
 			guard let limit = subtitleLineLimit, limit > 0 else { return nil }
 			return limit
 		}
-		
-		/// Calculates natural line count based on text length and chars per line
-		private static func naturalLineCount(for text: String, charsPerLine: Int) -> Int {
-			guard !text.isEmpty else { return 0 }
-			return max(1, (text.count + charsPerLine - 1) / charsPerLine)
+
+		/// Number of lines the title actually occupies when rendered with `titleFont` at the given width.
+		public func measuredTitleLines(availableWidth: CGFloat) -> Int {
+			BoneTextMeasurement.lineCount(
+				text: title,
+				uiFont: titleFont.uiFont,
+				availableWidth: availableWidth,
+				lineLimit: titleLineLimit
+			)
 		}
-		
-		/// Estimates the number of visible title lines
-		/// Uses line limit if set (and > 0), otherwise estimates from text length
-		public var estimatedTitleLines: Int {
-			let naturalLines = Self.naturalLineCount(for: title, charsPerLine: Self.titleCharsPerLine)
-			// nil or 0 means unlimited - use natural lines
-			if let limit = titleLineLimit, limit > 0 {
-				return min(naturalLines, limit)
-			}
-			return naturalLines
-		}
-		
-		/// Estimates the number of visible subtitle lines
-		/// Uses line limit if set (and > 0), otherwise estimates from text length
-		public var estimatedSubtitleLines: Int {
+
+		/// Number of lines the subtitle actually occupies when rendered with `subtitleFont` at the given width.
+		/// Returns 0 if there is no subtitle.
+		public func measuredSubtitleLines(availableWidth: CGFloat) -> Int {
 			guard let sub = subtitle else { return 0 }
-			let naturalLines = Self.naturalLineCount(for: sub, charsPerLine: Self.subtitleCharsPerLine)
-			// nil or 0 means unlimited - use natural lines
-			if let limit = subtitleLineLimit, limit > 0 {
-				return min(naturalLines, limit)
-			}
-			return naturalLines
+			return BoneTextMeasurement.lineCount(
+				text: sub,
+				uiFont: subtitleFont.uiFont,
+				availableWidth: availableWidth,
+				lineLimit: subtitleLineLimit
+			)
 		}
-		
+
+		/// Total number of rendered lines (title + subtitle) at the given text-area width.
+		public func measuredTotalLines(availableWidth: CGFloat) -> Int {
+			measuredTitleLines(availableWidth: availableWidth)
+				+ measuredSubtitleLines(availableWidth: availableWidth)
+		}
+
 		/// Creates a text configuration with title only
 		public init(
 			_ title: String,
-			font: Font = .system(size: 16, weight: .semibold),
+			font: BoneToast.Font = .system(size: 16, weight: .semibold),
 			color: Color? = nil,
 			lineLimit: Int? = 2,
 			alignment: BoneToast.TextAlignment = .leading
@@ -433,18 +514,18 @@ public enum BoneToast {
 			self.subtitleLineLimit = nil
 			self.alignment = alignment
 		}
-		
+
 		/// Creates a text configuration with title and subtitle
 		/// - Parameters:
 		///   - hasIcon: Whether an icon will be displayed. Used to determine default alignment.
 		///              With icon: defaults to .leading. Without icon: defaults to .center.
 		public init(
 			title: String,
-			titleFont: Font = .system(size: 16, weight: .semibold),
+			titleFont: BoneToast.Font = .system(size: 16, weight: .semibold),
 			titleColor: Color? = nil,
 			titleLineLimit: Int? = 2,
 			subtitle: String?,
-			subtitleFont: Font = .system(size: 14),
+			subtitleFont: BoneToast.Font = .system(size: 14),
 			subtitleColor: Color? = nil,
 			subtitleLineLimit: Int? = 2,
 			alignment: BoneToast.TextAlignment? = nil,
@@ -480,23 +561,37 @@ public enum BoneToast {
 		/// Never auto-dismiss; must be dismissed manually (tap or swipe)
 		case manual
 		
-		/// Calculates an appropriate delay based on visible text content
-		/// Uses a line-based approach determined by the configured line limits
-		/// - Parameter textConfig: The text configuration to base timing on
-		/// - Returns: A delay based on estimated visible lines (minimum 3.0 seconds)
-		public static func calculatedDelay(for textConfig: BoneToast.TextConfig) -> TimeInterval {
-			let titleLines = textConfig.estimatedTitleLines
-			let subtitleLines = textConfig.estimatedSubtitleLines
-			
+		/// Calculates an appropriate delay based on the toast's actual rendered line count.
+		///
+		/// Lines are measured at the available text-area width: `sceneWidth − edgePadding −
+		/// nonTextWidthAllowance`. Falls back to `BoneToast.defaultSceneWidth` when no live
+		/// scene width is available.
+		///
+		/// - Parameters:
+		///   - textConfig: The text configuration to base timing on
+		///   - sceneWidth: The current scene width
+		///   - edgePaddingHorizontal: Combined leading + trailing edge padding
+		///   - nonTextWidthAllowance: Width consumed by non-text content (icons, action buttons, paddings)
+		/// - Returns: A delay based on rendered visible lines (minimum 3.0 seconds)
+		public static func calculatedDelay(
+			for textConfig: BoneToast.TextConfig,
+			sceneWidth: CGFloat = BoneToast.defaultSceneWidth,
+			edgePaddingHorizontal: CGFloat = 0,
+			nonTextWidthAllowance: CGFloat = 0
+		) -> TimeInterval {
+			let availableWidth = max(0, sceneWidth - edgePaddingHorizontal - nonTextWidthAllowance)
+			let titleLines = textConfig.measuredTitleLines(availableWidth: availableWidth)
+			let subtitleLines = textConfig.measuredSubtitleLines(availableWidth: availableWidth)
+
 			// Base time for first title line, then additional time per extra line
 			// Title lines: 3.0s base + 0.5s per additional line
 			// Subtitle lines: 0.5s per line
 			let titleTime: TimeInterval = 3.0 + Double(max(0, titleLines - 1)) * 0.5
 			let subtitleTime: TimeInterval = Double(subtitleLines) * 0.5
-			
+
 			let calculated = titleTime + subtitleTime
 			let minTime: TimeInterval = 3.0
-			
+
 			return max(calculated, minTime)
 		}
 	}
@@ -818,15 +913,29 @@ public protocol BoneToastType: AnyObject, Identifiable, Observable where ID == U
 	/// Optional position override. When nil, uses the manager's default position.
 	var positionOverride: BoneToast.Position? { get }
 	
-	/// Optional corner style override. When nil, uses adaptive style based on text line count.
+	/// Optional corner style override. When nil, uses adaptive style based on rendered line count.
 	var cornerStyleOverride: BoneToast.CornerStyle? { get }
-	
-	/// Determines how and when the toast should be dismissed
+
+	/// Determines how and when the toast should be dismissed.
+	///
+	/// Concrete types should implement `resolvedDismissBehavior(sceneWidth:)` for measurement-based
+	/// delay calculation; this property is used for case checks (e.g. pinning) and falls back to
+	/// `BoneToast.defaultSceneWidth`.
 	var dismissBehavior: BoneToast.DismissBehavior { get }
-	
+
+	/// Width allowance for non-text content (icons, action buttons, paddings, HStack spacing) used
+	/// when measuring text-area width for adaptive corner style and dismiss-delay calculations.
+	/// Default returns 0; concrete types should override to account for their layout.
+	var nonTextWidthAllowance: CGFloat { get }
+
+	/// Set by the toast manager to the current scene width when this toast is presented (and updated
+	/// on scene size changes). Used by adaptive corner-style and dismiss-delay measurement so they
+	/// reflect the actual rendered width. Defaults to `BoneToast.defaultSceneWidth` until set.
+	var presentationSceneWidth: CGFloat { get set }
+
 	/// For toasts with `.whenReady` dismiss behavior, indicates when the toast is ready to dismiss
 	var isReadyToDismiss: Bool { get }
-	
+
 	/// Whether this toast has an action button that controls dismiss timing
 	var hasActionButton: Bool { get }
 	
@@ -853,13 +962,17 @@ public protocol BoneToastType: AnyObject, Identifiable, Observable where ID == U
 public extension BoneToastType {
 	/// Default implementation returns nil, meaning the manager's default will be used
 	var animationConfig: BoneToast.AnimationConfig? { nil }
-	
+
 	/// Default implementation returns false, meaning the container applies the background
 	var contentIncludesBackground: Bool { false }
-	
+
 	/// Default implementation returns false - most toasts don't have action buttons
 	var hasActionButton: Bool { false }
-	
+
+	/// Default implementation returns 0 — the protocol doesn't know about icon or action button
+	/// columns. Concrete types with those affordances should override.
+	var nonTextWidthAllowance: CGFloat { 0 }
+
 	/// Default interactive value based on dismiss behavior
 	var defaultInteractive: Bool {
 		switch dismissBehavior {
@@ -867,14 +980,23 @@ public extension BoneToastType {
 			case .whenReady: return false
 		}
 	}
-	
-	/// Resolved corner style - uses override if provided, otherwise calculates based on line count
-	/// Capsule for 1-2 lines, rounded rect for 3+ lines
+
+	/// Width of the text area available for line measurement, given the current `presentationSceneWidth`.
+	var availableTextWidth: CGFloat {
+		max(0, presentationSceneWidth - edgePadding.horizontalTotal - nonTextWidthAllowance)
+	}
+
+	/// Adaptive corner style based on the toast's rendered line count.
+	///
+	/// - Returns the explicit override if `cornerStyleOverride` is set.
+	/// - Otherwise measures title + subtitle lines at `availableTextWidth` and returns:
+	///   - `.capsule` for 1–2 total lines
+	///   - `.roundedRect(cornerRadius: 28)` for 3+ total lines
 	var cornerStyle: BoneToast.CornerStyle {
 		if let override = cornerStyleOverride {
 			return override
 		}
-		let totalLines = textConfig.estimatedTitleLines + textConfig.estimatedSubtitleLines
+		let totalLines = textConfig.measuredTotalLines(availableWidth: availableTextWidth)
 		return totalLines > 2 ? .roundedRect(cornerRadius: 28) : .capsule
 	}
 }
@@ -1209,23 +1331,45 @@ public final class StandardToast: BoneToastType {
 	
 	/// Set to true when the action button is tapped (triggers dismiss behavior)
 	public var actionButtonTapped: Bool = false
-	
+
 	/// Whether the toast can be interactively dismissed (tap/swipe)
 	public var interactive: Bool
-	
+
+	/// Set by the toast manager to the current scene width at presentation time. Used by
+	/// adaptive corner-style and dismiss-delay measurement.
+	public var presentationSceneWidth: CGFloat = BoneToast.defaultSceneWidth
+
 	/// Whether this toast has an action button
 	public var hasActionButton: Bool { actionButton != nil }
-	
+
+	/// Spacing between elements in the toast HStack (icon ↔ text ↔ button).
+	/// Mirrors the layout used in the toast content view.
+	private static let hstackSpacing: CGFloat = 8
+
+	/// Width allowance summed from the icon column, action button column, content padding, and
+	/// HStack spacing. Used to compute the text-area width for adaptive corner-style and
+	/// dismiss-delay measurement.
+	public var nonTextWidthAllowance: CGFloat {
+		var allowance: CGFloat = contentPadding.horizontalTotal
+		if systemImage != nil || iconBuilder != nil {
+			allowance += systemImageSize + Self.hstackSpacing
+		}
+		if let actionButton {
+			allowance += actionButton.resolvedWidth + Self.hstackSpacing
+		}
+		return allowance
+	}
+
 	/// Resolved title color (uses backgroundStyle default if not specified)
 	public var titleColor: Color {
 		textConfig.titleColor ?? backgroundStyle.defaultFontColor
 	}
-	
+
 	/// Resolved subtitle color (uses backgroundStyle default with reduced opacity if not specified)
 	public var subtitleColor: Color {
 		textConfig.subtitleColor ?? backgroundStyle.defaultFontColor.opacity(0.85)
 	}
-	
+
 	public var dismissBehavior: BoneToast.DismissBehavior {
 		switch dismissStyle {
 			case .auto(let delay):
@@ -1233,7 +1377,12 @@ public final class StandardToast: BoneToastType {
 				if actionButton != nil && delay == nil {
 					return .afterDelay(0.2)
 				}
-				let resolvedDelay = delay ?? BoneToast.StandardDismiss.calculatedDelay(for: textConfig)
+				let resolvedDelay = delay ?? BoneToast.StandardDismiss.calculatedDelay(
+					for: textConfig,
+					sceneWidth: presentationSceneWidth,
+					edgePaddingHorizontal: edgePadding.horizontalTotal,
+					nonTextWidthAllowance: nonTextWidthAllowance
+				)
 				return .afterDelay(resolvedDelay)
 			case .manual:
 				return .manual
@@ -1369,7 +1518,7 @@ public final class StandardToast: BoneToastType {
 		systemImageSize: CGFloat = 16,
 		systemImageColor: Color? = nil,
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
-		font: Font = .system(size: 16, weight: .semibold),
+		font: BoneToast.Font = .system(size: 16, weight: .semibold),
 		fontColor: Color? = nil,
 		position: BoneToast.Position? = nil,
 		dismiss: BoneToast.StandardDismiss = .auto(),
@@ -1422,7 +1571,7 @@ public final class StandardToast: BoneToastType {
 		_ message: String,
 		@ViewBuilder icon: @escaping () -> Icon,
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
-		font: Font = .system(size: 16, weight: .semibold),
+		font: BoneToast.Font = .system(size: 16, weight: .semibold),
 		fontColor: Color? = nil,
 		position: BoneToast.Position? = nil,
 		dismiss: BoneToast.StandardDismiss = .auto(),
@@ -1479,14 +1628,14 @@ public final class StandardToast: BoneToastType {
 	private var textView: some View {
 		VStack(alignment: textConfig.alignment.horizontalAlignment, spacing: 2) {
 			Text(textConfig.title)
-				.font(textConfig.titleFont)
+				.font(textConfig.titleFont.swiftUIFont)
 				.foregroundColor(titleColor)
 				.lineLimit(textConfig.effectiveTitleLineLimit)
 				.multilineTextAlignment(textConfig.alignment.textAlignment)
-			
+
 			if let subtitle = textConfig.subtitle {
 				Text(subtitle)
-					.font(textConfig.subtitleFont)
+					.font(textConfig.subtitleFont.swiftUIFont)
 					.foregroundColor(subtitleColor)
 					.lineLimit(textConfig.effectiveSubtitleLineLimit)
 					.multilineTextAlignment(textConfig.alignment.textAlignment)
@@ -1561,7 +1710,7 @@ public extension BoneToast {
 		///   - name: The SF Symbol name (e.g., "checkmark.circle.fill")
 		///   - size: Icon size in points (defaults to toast's symbolSize if nil)
 		///   - weight: Font weight (defaults to .semibold if nil)
-		case symbol(_ name: String, size: CGFloat? = nil, weight: Font.Weight? = nil)
+		case symbol(_ name: String, size: CGFloat? = nil, weight: SwiftUI.Font.Weight? = nil)
 		
 		/// Custom view icon. Uses crossfade transitions between states.
 		case custom(@MainActor () -> AnyView)
@@ -1632,7 +1781,7 @@ public protocol CompletableBoneToastType: BoneToastType {
 	var message: String { get set }
 	
 	/// Font for the message text
-	var font: Font { get }
+	var font: BoneToast.Font { get }
 	
 	/// Text alignment within the toast
 	var textAlignment: BoneToast.TextAlignment { get }
@@ -1917,10 +2066,10 @@ public protocol ToastPhaseProviding: Sendable {
 	var symbol: ToastSymbolConfig { get }
 	
 	/// Title font override (nil inherits from base)
-	var titleFont: Font? { get }
-	
+	var titleFont: BoneToast.Font? { get }
+
 	/// Subtitle font override (nil inherits from base)
-	var subtitleFont: Font? { get }
+	var subtitleFont: BoneToast.Font? { get }
 	
 	/// Font/icon color override (nil inherits from base)
 	var fontColor: Color? { get }
@@ -1935,8 +2084,8 @@ public protocol ToastPhaseProviding: Sendable {
 /// Default implementations for optional properties
 public extension ToastPhaseProviding {
 	var subtitle: String? { nil }
-	var titleFont: Font? { nil }
-	var subtitleFont: Font? { nil }
+	var titleFont: BoneToast.Font? { nil }
+	var subtitleFont: BoneToast.Font? { nil }
 	var fontColor: Color? { nil }
 	var backgroundStyle: BoneToast.BackgroundStyle? { nil }
 	var actionButton: ToastActionButtonOverride { .inherit }
@@ -1955,10 +2104,10 @@ public struct ToastPhaseConfig: ToastPhaseProviding, Sendable {
 	public let symbol: ToastSymbolConfig
 	
 	/// Title font override (nil inherits from base)
-	public let titleFont: Font?
-	
+	public let titleFont: BoneToast.Font?
+
 	/// Subtitle font override (nil inherits from base)
-	public let subtitleFont: Font?
+	public let subtitleFont: BoneToast.Font?
 	
 	/// Background style override for this phase (nil inherits from base)
 	public let backgroundStyle: BoneToast.BackgroundStyle?
@@ -1974,8 +2123,8 @@ public struct ToastPhaseConfig: ToastPhaseProviding, Sendable {
 		title: String? = nil,
 		subtitle: String? = nil,
 		symbol: ToastSymbolConfig = .none,
-		titleFont: Font? = nil,
-		subtitleFont: Font? = nil,
+		titleFont: BoneToast.Font? = nil,
+		subtitleFont: BoneToast.Font? = nil,
 		backgroundStyle: BoneToast.BackgroundStyle? = nil,
 		fontColor: Color? = nil,
 		actionButton: ToastActionButtonOverride = .inherit
@@ -2186,9 +2335,27 @@ public class CompletableToast: CompletableBoneToastType {
 	
 	/// Whether the toast can be interactively dismissed
 	public var interactive: Bool = false
-	
+
 	/// Whether the action button was tapped (triggers dismissal)
 	public var actionButtonTapped: Bool = false
+
+	/// Set by the toast manager to the current scene width at presentation time. Used by
+	/// adaptive corner-style measurement.
+	public var presentationSceneWidth: CGFloat = BoneToast.defaultSceneWidth
+
+	/// Spacing between elements in the completable toast HStack (icon ↔ text ↔ button).
+	private static let hstackSpacing: CGFloat = 8
+
+	/// Width allowance summed from the icon column, action button column, and content padding.
+	public var nonTextWidthAllowance: CGFloat {
+		var allowance: CGFloat = contentPadding.horizontalTotal
+		// CompletableToast always has an icon column for the symbol
+		allowance += symbolSize + Self.hstackSpacing
+		if let actionButton = currentActionButton {
+			allowance += actionButton.resolvedWidth + Self.hstackSpacing
+		}
+		return allowance
+	}
 	
 	// MARK: - Computed Styling
 	
@@ -2213,7 +2380,7 @@ public class CompletableToast: CompletableBoneToastType {
 	}
 	
 	/// Current title font based on phase
-	public var currentTitleFont: Font {
+	public var currentTitleFont: BoneToast.Font {
 		switch phase {
 			case .pending: pendingPhaseConfig?.titleFont ?? textConfig.titleFont
 			case .active: activePhaseConfig.titleFont ?? textConfig.titleFont
@@ -2233,7 +2400,7 @@ public class CompletableToast: CompletableBoneToastType {
 	}
 	
 	/// Current subtitle font based on phase
-	public var currentSubtitleFont: Font {
+	public var currentSubtitleFont: BoneToast.Font {
 		switch phase {
 			case .pending: pendingPhaseConfig?.subtitleFont ?? textConfig.subtitleFont
 			case .active: activePhaseConfig.subtitleFont ?? textConfig.subtitleFont
@@ -2260,7 +2427,7 @@ public class CompletableToast: CompletableBoneToastType {
 	
 	// MARK: - Computed Properties (Protocol Conformance)
 	
-	public var font: Font { textConfig.titleFont }
+	public var font: BoneToast.Font { textConfig.titleFont }
 	public var textAlignment: BoneToast.TextAlignment { textConfig.alignment }
 	
 	public var dismissBehavior: BoneToast.DismissBehavior {
@@ -2441,8 +2608,8 @@ public class CompletableToast: CompletableBoneToastType {
 		subtitle: String? = nil,
 		activeSymbol: String? = nil,
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
-		font: Font = .system(size: 16, weight: .semibold),
-		subtitleFont: Font = .system(size: 14),
+		font: BoneToast.Font = .system(size: 16, weight: .semibold),
+		subtitleFont: BoneToast.Font = .system(size: 14),
 		fontColor: Color? = nil,
 		position: BoneToast.Position? = nil,
 		pending: SimplePhaseConfig = .disabled,
@@ -2720,7 +2887,7 @@ public final class ProgressToast: CompletableToast {
 	public init(
 		_ message: String,
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
-		font: Font = .system(size: 16, weight: .semibold),
+		font: BoneToast.Font = .system(size: 16, weight: .semibold),
 		fontColor: Color? = nil,
 		position: BoneToast.Position? = nil,
 		pendingConfig: ToastPhaseConfig? = .inheritMessage,
@@ -2803,7 +2970,7 @@ public enum ActivityIndicatorStyle: Sendable {
 	///   - variableValue: Optional variable value for SF Symbol fill (0.0-1.0)
 	///   - weight: Font weight for the symbol (default: .semibold)
 	///   - effect: The symbol effect to apply during active/pending phases
-	case custom(symbol: String, variableValue: Double? = nil, weight: Font.Weight = .semibold, effect: ActivitySymbolEffect)
+	case custom(symbol: String, variableValue: Double? = nil, weight: SwiftUI.Font.Weight = .semibold, effect: ActivitySymbolEffect)
 
 	/// Symbol effects available for custom activity indicators
 	public enum ActivitySymbolEffect: Sendable, Equatable {
@@ -2875,7 +3042,7 @@ public final class ActivityToast: CompletableToast {
 		_ message: String,
 		style: ActivityIndicatorStyle = .standard,
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
-		font: Font = .system(size: 16, weight: .semibold),
+		font: BoneToast.Font = .system(size: 16, weight: .semibold),
 		fontColor: Color? = nil,
 		position: BoneToast.Position? = nil,
 		pendingConfig: ToastPhaseConfig? = .inheritMessage,
@@ -3072,7 +3239,7 @@ public extension ActivityToast {
 	static func network(
 		_ message: String,
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
-		font: Font = .system(size: 16, weight: .semibold),
+		font: BoneToast.Font = .system(size: 16, weight: .semibold),
 		fontColor: Color? = nil,
 		position: BoneToast.Position? = nil,
 		pendingConfig: ToastPhaseConfig? = .inheritMessage,
@@ -3111,7 +3278,7 @@ private struct CompletableToastContentView<Toast: CompletableBoneToastType>: Vie
 		HStack(spacing: 8) {
 			toast.iconView
 			Text(toast.message)
-				.font(toast.font)
+				.font(toast.font.swiftUIFont)
 				.foregroundColor(toast.fontColor)
 				.multilineTextAlignment(toast.textAlignment.textAlignment)
 				.lineLimit(1)
@@ -3564,9 +3731,13 @@ private struct GlobalToastContainerView: View {
 		GeometryReader { outerGeometry in
 			let safeTop = outerGeometry.safeAreaInsets.top
 			let safeBottom = outerGeometry.safeAreaInsets.bottom
-			
+
 			ZStack(alignment: .top) {
 				Color.clear
+					.onAppear { manager.currentSceneWidth = outerGeometry.size.width }
+					.onChange(of: outerGeometry.size.width, initial: false) { _, newWidth in
+						manager.currentSceneWidth = newWidth
+					}
 				
 				// Top toasts
 				VStack(spacing: manager.toastSpacing) {
@@ -3809,7 +3980,20 @@ public final class BoneToastManager {
 	
 	/// Controls how new toasts are stacked relative to existing ones
 	public var stackOrder: BoneToast.StackOrder
-	
+
+	/// Current scene width — propagated to each toast's `presentationSceneWidth` so adaptive
+	/// corner-style and dismiss-delay calculations reflect the actual rendered width. Updated
+	/// from the global window's bounds (in global mode) or via the scoped overlay's geometry
+	/// (in scoped mode).
+	public var currentSceneWidth: CGFloat = BoneToast.defaultSceneWidth {
+		didSet {
+			guard currentSceneWidth != oldValue else { return }
+			for toast in toasts {
+				toast.presentationSceneWidth = currentSceneWidth
+			}
+		}
+	}
+
 	// MARK: - Initialization
 	
 	/// Creates a scoped toast manager for use with `.scopedToastContainer(manager:)`
@@ -3866,17 +4050,21 @@ public final class BoneToastManager {
 		if isGlobal && !isSetup {
 			setup()
 		}
-		
+
+		// Seed the toast's presentation scene width so that auto corner-style and dismiss-delay
+		// calculations measure against the actual rendered width from the very first frame.
+		toast.presentationSceneWidth = currentSceneWidth
+
 		let effectiveTiming = toast.animationConfig?.timing ?? animationConfig.timing
 		withAnimation(effectiveTiming.animation) {
 			// Simply append toasts - sorting by pinning is handled in the view
 			toasts.append(toast)
 		}
-		
+
 		if let onDismiss {
 			dismissCallbacks[toast.id] = onDismiss
 		}
-		
+
 		setupDismissal(for: toast)
 		return toast
 	}
@@ -4148,6 +4336,21 @@ private struct BoneToastOverlayModifier: ViewModifier {
 				}
 				.padding(position == .top ? .top : .bottom)
 			}
+			.background {
+				// Capture host content width as the scene width for adaptive corner-style measurement.
+				// Only the .top overlay reports — both run with the same geometry, but writing through
+				// `didSet` is idempotent so duplicates would be no-ops anyway.
+				if position == .top {
+					GeometryReader { geo in
+						Color.clear
+							.onAppear { manager.currentSceneWidth = geo.size.width }
+							.onChange(of: geo.size.width, initial: false) { _, newWidth in
+								manager.currentSceneWidth = newWidth
+							}
+					}
+					.allowsHitTesting(false)
+				}
+			}
 			.animation(manager.animationConfig.timing.animation, value: toasts.map(\.id))
 	}
 }
@@ -4235,9 +4438,83 @@ private class PassthroughWindow: UIWindow {
 /// Preference key for reporting toast frames to the window
 private struct ToastFramePreferenceKey: PreferenceKey {
 	static let defaultValue: [UUID: CGRect] = [:]
-	
+
 	static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
 		value.merge(nextValue()) { $1 }
+	}
+}
+
+// MARK: - Font Mapping Helpers
+
+internal extension SwiftUI.Font.Weight {
+	var uiFontWeight: UIFont.Weight {
+		switch self {
+			case .ultraLight: return .ultraLight
+			case .thin: return .thin
+			case .light: return .light
+			case .regular: return .regular
+			case .medium: return .medium
+			case .semibold: return .semibold
+			case .bold: return .bold
+			case .heavy: return .heavy
+			case .black: return .black
+			default: return .regular
+		}
+	}
+}
+
+internal extension SwiftUI.Font.Design {
+	var uiFontDescriptorDesign: UIFontDescriptor.SystemDesign {
+		switch self {
+			case .default: return .default
+			case .serif: return .serif
+			case .rounded: return .rounded
+			case .monospaced: return .monospaced
+			@unknown default: return .default
+		}
+	}
+}
+
+// MARK: - Text Measurement
+
+/// Measures the visible line count of a piece of text rendered with a given font at a given width.
+///
+/// Used by the auto corner-style and auto dismiss-delay logic to determine how many lines a string
+/// will actually occupy when rendered, accounting for font size and the available text-area width
+/// (i.e. toast width minus icon, action button, and paddings).
+internal enum BoneTextMeasurement {
+	static func lineCount(
+		text: String,
+		uiFont: UIFont,
+		availableWidth: CGFloat,
+		lineLimit: Int? = nil
+	) -> Int {
+		guard !text.isEmpty, availableWidth > 0 else { return 0 }
+		let bounds = (text as NSString).boundingRect(
+			with: CGSize(width: availableWidth, height: CGFloat.greatestFiniteMagnitude),
+			options: [.usesLineFragmentOrigin, .usesFontLeading],
+			attributes: [.font: uiFont],
+			context: nil
+		)
+		let lineHeight = uiFont.lineHeight > 0 ? uiFont.lineHeight : uiFont.pointSize
+		let measured = max(1, Int(ceil(bounds.height / lineHeight)))
+		if let limit = lineLimit, limit > 0 {
+			return min(measured, limit)
+		}
+		return measured
+	}
+
+	/// Width of a piece of text rendered on a single line with the given font (no wrapping).
+	/// Used to estimate the intrinsic content width of action buttons.
+	static func singleLineWidth(text: String, uiFont: UIFont) -> CGFloat {
+		guard !text.isEmpty else { return 0 }
+		let bounds = (text as NSString).boundingRect(
+			with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+			options: [.usesLineFragmentOrigin, .usesFontLeading],
+			attributes: [.font: uiFont],
+			context: nil
+		)
+		return ceil(bounds.width)
 	}
 }
 
