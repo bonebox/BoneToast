@@ -3995,7 +3995,7 @@ private struct AnyToastViewForWindow: View {
 			case .none:
 				return EdgeInsets()
 			case .systemDefault:
-				return EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
+				return EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8)
 			case .custom(let insets):
 				return EdgeInsets(top: 0, leading: insets.leading, bottom: 0, trailing: insets.trailing)
 		}
@@ -4384,7 +4384,7 @@ private struct AnyToastView: View {
 			case .none:
 				return EdgeInsets()
 			case .systemDefault:
-				return EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
+				return EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8)
 			case .custom(let insets):
 				return EdgeInsets(top: 0, leading: insets.leading, bottom: 0, trailing: insets.trailing)
 		}
