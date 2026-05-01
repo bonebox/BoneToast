@@ -3919,23 +3919,45 @@ private struct GlobalToastContainerView: View {
 					ForEach(Array(topList.enumerated()), id: \.element.id) { index, toast in
 						let transition = effectiveTransition(for: toast)
 						let timing = effectiveTiming(for: toast)
-						AnyToastViewForWindow(toast: toast, resolvedPosition: .top, transition: transition, timing: timing) {
-							manager.dismiss(id: toast.id)
-						}
+						AnyToastViewForWindow(
+							toast: toast,
+							resolvedPosition: .top,
+							transition: transition,
+							timing: timing,
+							onDismiss: { manager.dismiss(id: toast.id) },
+							onPressChanged: { pressing in
+								if pressing {
+									manager.pauseDismiss(id: toast.id)
+								} else {
+									manager.resumeDismiss(id: toast.id)
+								}
+							}
+						)
 						.transition(transition.transition(for: .top))
 						.zIndex(Double(topList.count - index))
 					}
 				}
 				.padding(.top, safeTop)
-				
+
 				// Bottom toasts
 				VStack(spacing: manager.toastSpacing) {
 					ForEach(Array(bottomList.enumerated()), id: \.element.id) { index, toast in
 						let transition = effectiveTransition(for: toast)
 						let timing = effectiveTiming(for: toast)
-						AnyToastViewForWindow(toast: toast, resolvedPosition: .bottom, transition: transition, timing: timing) {
-							manager.dismiss(id: toast.id)
-						}
+						AnyToastViewForWindow(
+							toast: toast,
+							resolvedPosition: .bottom,
+							transition: transition,
+							timing: timing,
+							onDismiss: { manager.dismiss(id: toast.id) },
+							onPressChanged: { pressing in
+								if pressing {
+									manager.pauseDismiss(id: toast.id)
+								} else {
+									manager.resumeDismiss(id: toast.id)
+								}
+							}
+						)
 						.transition(transition.transition(for: .bottom))
 						.zIndex(Double(bottomList.count - index))
 					}
@@ -3986,6 +4008,7 @@ private struct AnyToastViewForWindow: View {
 	let transition: BoneToast.Transition
 	let timing: BoneToast.Timing
 	let onDismiss: () -> Void
+	let onPressChanged: (Bool) -> Void
 
 	@State private var dragOffset: CGFloat = 0
 	@State private var lineCountTracker = BoneToastLineCountTracker()
@@ -4024,6 +4047,12 @@ private struct AnyToastViewForWindow: View {
 			.offset(y: dragOffset)
 			.gesture(swipeGesture)
 			.onTapGesture(perform: handleTap)
+			.onLongPressGesture(
+				minimumDuration: .infinity,
+				maximumDistance: .infinity,
+				perform: {},
+				onPressingChanged: { pressing in onPressChanged(pressing) }
+			)
 			.overlay(frameReporter)
 			.onChange(of: lineCountTracker.lineCount) { _, newValue in
 				// Plumb the measured line count back to the model so the manager can use it
@@ -4145,6 +4174,7 @@ public final class BoneToastManager {
 	private var observationTasks: [UUID: Task<Void, Never>] = [:]
 	private var actionButtonTasks: [UUID: Task<Void, Never>] = [:]
 	private var dismissCallbacks: [UUID: @MainActor () -> Void] = [:]
+	private var pausedToastIDs: Set<UUID> = []
 	
 	/// Whether this is the global (window-based) manager
 	private let isGlobal: Bool
@@ -4254,7 +4284,8 @@ public final class BoneToastManager {
 		observationTasks.removeValue(forKey: id)
 		actionButtonTasks[id]?.cancel()
 		actionButtonTasks.removeValue(forKey: id)
-		
+		pausedToastIDs.remove(id)
+
 		let callback = dismissCallbacks.removeValue(forKey: id)
 		
 		withAnimation(animationConfig.timing.animation) {
@@ -4279,7 +4310,8 @@ public final class BoneToastManager {
 			task.cancel()
 			actionButtonTasks.removeValue(forKey: id)
 		}
-		
+		pausedToastIDs.removeAll()
+
 		let callbacks = dismissCallbacks
 		dismissCallbacks.removeAll()
 		
@@ -4310,8 +4342,7 @@ public final class BoneToastManager {
 							try? await Task.sleep(for: .milliseconds(50))
 						}
 						guard !Task.isCancelled else { return }
-						try? await Task.sleep(for: .seconds(delay))
-						guard !Task.isCancelled else { return }
+						guard await self?.sleepPausable(seconds: delay, id: toast.id) == true else { return }
 						self?.dismiss(id: toast.id)
 					}
 					actionButtonTasks[toast.id] = task
@@ -4330,28 +4361,25 @@ public final class BoneToastManager {
 						} else {
 							resolvedDelay = delay
 						}
-						try? await Task.sleep(for: .seconds(resolvedDelay))
-						guard !Task.isCancelled else { return }
+						guard await self?.sleepPausable(seconds: resolvedDelay, id: toast.id) == true else { return }
 						self?.dismiss(id: toast.id)
 					}
 					dismissTasks[toast.id] = task
 				} else {
 					// For regular toasts: start delay immediately
 					let task = Task { [weak self] in
-						try? await Task.sleep(for: .seconds(delay))
-						guard !Task.isCancelled else { return }
+						guard await self?.sleepPausable(seconds: delay, id: toast.id) == true else { return }
 						self?.dismiss(id: toast.id)
 					}
 					dismissTasks[toast.id] = task
 				}
-				
+
 			case .whenReady(let delay):
 				// Observe isReadyToDismiss and dismiss when true (same for all toasts)
 				let task = Task { [weak self] in
 					while !Task.isCancelled {
 						if toast.isReadyToDismiss {
-							try? await Task.sleep(for: .seconds(delay))
-							guard !Task.isCancelled else { return }
+							guard await self?.sleepPausable(seconds: delay, id: toast.id) == true else { return }
 							self?.dismiss(id: toast.id)
 							return
 						}
@@ -4359,11 +4387,40 @@ public final class BoneToastManager {
 					}
 				}
 				observationTasks[toast.id] = task
-				
+
 			case .manual:
 				// Manual dismiss - do nothing, toast stays until explicitly dismissed
 				break
 		}
+	}
+
+	/// Sleeps for the given duration, but pauses (without consuming time) whenever the toast's
+	/// id is in `pausedToastIDs`. Returns `true` if the full duration elapsed, `false` if the
+	/// task was cancelled mid-sleep.
+	private func sleepPausable(seconds: TimeInterval, id: UUID) async -> Bool {
+		var remaining: Duration = .seconds(seconds)
+		let tick: Duration = .milliseconds(50)
+		while remaining > .zero {
+			try? await Task.sleep(for: tick)
+			if Task.isCancelled { return false }
+			if !pausedToastIDs.contains(id) {
+				remaining -= tick
+			}
+		}
+		return true
+	}
+
+	// MARK: - Press-to-Pause
+
+	/// Pauses the auto-dismiss countdown for the given toast id. Has no effect on `.manual`
+	/// toasts or while a `.whenReady` toast is still waiting to become ready.
+	public func pauseDismiss(id: UUID) {
+		pausedToastIDs.insert(id)
+	}
+
+	/// Resumes the auto-dismiss countdown for the given toast id.
+	public func resumeDismiss(id: UUID) {
+		pausedToastIDs.remove(id)
 	}
 }
 
@@ -4375,6 +4432,7 @@ private struct AnyToastView: View {
 	let transition: BoneToast.Transition
 	let timing: BoneToast.Timing
 	let onDismiss: () -> Void
+	let onPressChanged: (Bool) -> Void
 
 	@State private var dragOffset: CGFloat = 0
 	@State private var lineCountTracker = BoneToastLineCountTracker()
@@ -4413,6 +4471,12 @@ private struct AnyToastView: View {
 			.offset(y: dragOffset)
 			.gesture(swipeGesture)
 			.onTapGesture(perform: handleTap)
+			.onLongPressGesture(
+				minimumDuration: .infinity,
+				maximumDistance: .infinity,
+				perform: {},
+				onPressingChanged: { pressing in onPressChanged(pressing) }
+			)
 			.overlay(frameReporter)
 			.onChange(of: lineCountTracker.lineCount) { _, newValue in
 				toast.measuredLineCount = newValue
@@ -4535,9 +4599,20 @@ private struct BoneToastOverlayModifier: ViewModifier {
 					ForEach(Array(toasts.enumerated()), id: \.element.id) { index, toast in
 						let transition = effectiveTransition(for: toast)
 						let timing = effectiveTiming(for: toast)
-						AnyToastView(toast: toast, resolvedPosition: position, transition: transition, timing: timing) {
-							manager.dismiss(id: toast.id)
-						}
+						AnyToastView(
+							toast: toast,
+							resolvedPosition: position,
+							transition: transition,
+							timing: timing,
+							onDismiss: { manager.dismiss(id: toast.id) },
+							onPressChanged: { pressing in
+								if pressing {
+									manager.pauseDismiss(id: toast.id)
+								} else {
+									manager.resumeDismiss(id: toast.id)
+								}
+							}
+						)
 						.transition(transition.transition(for: position))
 						// Higher zIndex for toasts closer to the edge ensures proper layering during animation
 						.zIndex(Double(toasts.count - index))
