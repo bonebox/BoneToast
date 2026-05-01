@@ -2,57 +2,86 @@ import Testing
 import SwiftUI
 @testable import BoneToast
 
-@Suite("Adaptive corner style — render-time measurement")
+/// Renders a toast and returns the line count SwiftUI's layout produces. Uses
+/// `UIHostingController.sizeThatFits` to drive an actual layout pass — the same engine that
+/// renders the toast on screen — so tests reflect what the user will see.
+@MainActor
+private func renderedLineCount(
+	for toast: StandardToast,
+	containerWidth: CGFloat = 393
+) async -> Int {
+	let tracker = BoneToastLineCountTracker()
+
+	// Mirror the toast view's layering: content + edge padding, with the line-count tracker
+	// injected via environment so the internal Layout reports back to it.
+	let view = toast.content
+		.environment(\.boneToastLineCountTracker, tracker)
+		.frame(maxWidth: .infinity)
+		.padding(.horizontal, 16)
+
+	let host = UIHostingController(rootView: view)
+	host.view.frame = CGRect(x: 0, y: 0, width: containerWidth, height: 0)
+	let fitted = host.sizeThatFits(in: CGSize(width: containerWidth, height: 0))
+	host.view.frame = CGRect(x: 0, y: 0, width: containerWidth, height: fitted.height)
+	host.view.layoutIfNeeded()
+
+	// `lineCount` is updated by a deferred `Task { @MainActor in ... }` inside the Layout, so
+	// we yield a few times to let those tasks run before reading.
+	for _ in 0..<10 where tracker.lineCount == nil {
+		await Task.yield()
+	}
+	return tracker.lineCount ?? 1
+}
+
+@MainActor
+private func resolvedCornerStyle(for toast: StandardToast, containerWidth: CGFloat = 393) async -> BoneToast.CornerStyle {
+	let lines = await renderedLineCount(for: toast, containerWidth: containerWidth)
+	return resolveCornerStyle(override: toast.cornerStyleOverride, measuredLineCount: lines) ?? .capsule
+}
+
+@Suite("Adaptive corner style — SwiftUI render-time measurement")
 @MainActor
 struct AdaptiveCornerStyleTests {
 
 	@Test("Single line title alone is a capsule")
-	func singleLineTitleIsCapsule() {
+	func singleLineTitleIsCapsule() async {
 		let toast = StandardToast(text: BoneToast.TextConfig("Quick update"))
-		toast.presentationSceneWidth = 393
-		switch toast.cornerStyle {
+		switch await resolvedCornerStyle(for: toast) {
 			case .capsule: break
 			case .roundedRect(let r): Issue.record("expected .capsule, got .roundedRect(\(r))")
 		}
 	}
 
 	@Test("Title + 1-line subtitle (≤2 total lines) is a capsule")
-	func titleAndShortSubtitleIsCapsule() {
+	func titleAndShortSubtitleIsCapsule() async {
 		let toast = StandardToast(text: BoneToast.TextConfig(
 			title: "Saved",
 			subtitle: "All set."
 		))
-		toast.presentationSceneWidth = 393
-		switch toast.cornerStyle {
+		switch await resolvedCornerStyle(for: toast) {
 			case .capsule: break
 			case .roundedRect(let r): Issue.record("expected .capsule, got .roundedRect(\(r))")
 		}
 	}
 
 	@Test("Long title that wraps to 3+ lines is a roundedRect")
-	func wrappingTitleIsRoundedRect() {
+	func wrappingTitleIsRoundedRect() async {
 		let toast = StandardToast(text: BoneToast.TextConfig(
 			"This is an unusually long single-line title that will absolutely wrap to multiple lines on any phone in portrait, easily three or more.",
 			lineLimit: nil
 		))
-		toast.presentationSceneWidth = 393
-		switch toast.cornerStyle {
+		switch await resolvedCornerStyle(for: toast) {
 			case .roundedRect: break
 			case .capsule: Issue.record("expected .roundedRect for wrapping title, got .capsule")
 		}
 	}
 
-	// The reported failing case: 1-line title + 2-line subtitle, with an action button consuming
-	// trailing space. Pre-fix this rendered as `.capsule` because the chars-per-line heuristic
-	// didn't account for the button's width reduction. With render-time measurement plus the
-	// action button's resolved width factored into `nonTextWidthAllowance`, this should now
-	// produce `.roundedRect`.
-	@Test("1-line title + 2-line subtitle + action button is a roundedRect")
-	func subtitleWrapsBecauseOfActionButtonProducesRoundedRect() {
-		let button = BoneToast.ActionButton(
-			"Undo",
-			action: {}
-		)
+	// The original failing case: 1-line title + multi-line subtitle wrapped by an action button.
+	// SwiftUI's wrap is the source of truth here, so the corner style and the visible wrapping
+	// always agree — no NSAttributedString drift.
+	@Test("1-line title + multi-line subtitle + action button is a roundedRect")
+	func subtitleWrapsBecauseOfActionButtonProducesRoundedRect() async {
+		let button = BoneToast.ActionButton("Undo", action: {})
 		let toast = StandardToast(
 			text: BoneToast.TextConfig(
 				title: "Item moved",
@@ -60,78 +89,76 @@ struct AdaptiveCornerStyleTests {
 			),
 			actionButton: button
 		)
-		toast.presentationSceneWidth = 393
-		switch toast.cornerStyle {
+		switch await resolvedCornerStyle(for: toast) {
 			case .roundedRect: break
 			case .capsule: Issue.record("expected .roundedRect (subtitle wraps when button steals width), got .capsule")
 		}
 	}
 
-	@Test("Same content without action button still wraps but at different threshold")
-	func sameContentWithoutActionButton() {
-		// Sanity: identical text, no button. Should still measure subtitle as multi-line on iPhone-sized
-		// width because the subtitle is long enough.
-		let toast = StandardToast(text: BoneToast.TextConfig(
-			title: "Item moved",
-			subtitle: "Tap undo within five seconds to restore the item to its original location."
-		))
-		toast.presentationSceneWidth = 393
-		// Either capsule (≤2 lines fits) or roundedRect — we don't assert direction here since the
-		// subtitle is borderline; we only assert that the *with-button* case from the previous test
-		// was strictly more conservative than this one.
-		_ = toast.cornerStyle
-	}
-
 	@Test("Custom larger font causes earlier wrapping")
-	func customLargerFontWraps() {
+	func customLargerFontWraps() async {
 		let toast = StandardToast(text: BoneToast.TextConfig(
 			title: "A moderately long title that probably fits on a single line at default size",
 			titleFont: .system(size: 32, weight: .bold),
 			titleLineLimit: nil,
 			subtitle: nil
 		))
-		toast.presentationSceneWidth = 393
-		// With 32pt font, the title should wrap to 3+ lines on a 393pt-wide screen.
-		switch toast.cornerStyle {
+		switch await resolvedCornerStyle(for: toast) {
 			case .roundedRect: break
 			case .capsule: Issue.record("expected .roundedRect for 32pt title at iPhone width, got .capsule")
 		}
 	}
 
 	@Test("Explicit cornerStyle override wins over measurement")
-	func overrideWinsOverMeasurement() {
+	func overrideWinsOverMeasurement() async {
 		let toast = StandardToast(
 			text: BoneToast.TextConfig("Anything"),
 			cornerStyle: .roundedRect(cornerRadius: 12)
 		)
-		toast.presentationSceneWidth = 393
-		switch toast.cornerStyle {
+		switch await resolvedCornerStyle(for: toast) {
 			case .roundedRect(let r): #expect(r == 12)
 			case .capsule: Issue.record("expected explicit override to win")
 		}
 	}
 }
 
-@Suite("Action button resolved width")
+@Suite("Dismiss delay")
 @MainActor
-struct ActionButtonWidthTests {
+struct DismissDelayTests {
 
-	@Test("Title button width includes content padding")
-	func titleButtonWidthIncludesPadding() {
-		let button = BoneToast.ActionButton("Undo", action: {})
-		// At a minimum the button is wider than the minWidth (60) since "Undo" + 24pt of padding
-		// is small but well over zero. Just sanity-check it's a reasonable value.
-		#expect(button.resolvedWidth >= 60)
-		#expect(button.resolvedWidth < 200)
+	@Test("Single line → 3.0s")
+	func oneLine() {
+		#expect(BoneToast.StandardDismiss.calculatedDelay(lineCount: 1) == 3.0)
 	}
 
-	@Test("Symbol button width is symbolSize + padding")
-	func symbolButtonWidth() {
-		let button = BoneToast.ActionButton(
-			systemImage: "xmark",
-			action: {}
+	@Test("Two lines → 3.5s")
+	func twoLines() {
+		#expect(BoneToast.StandardDismiss.calculatedDelay(lineCount: 2) == 3.5)
+	}
+
+	@Test("Five lines → 5.0s")
+	func fiveLines() {
+		#expect(BoneToast.StandardDismiss.calculatedDelay(lineCount: 5) == 5.0)
+	}
+
+	@Test("Auto-style toast without explicit delay declares dismissDelayDependsOnRender")
+	func autoToastDependsOnRender() {
+		let toast = StandardToast(text: BoneToast.TextConfig("Hi"))
+		#expect(toast.dismissDelayDependsOnRender == true)
+	}
+
+	@Test("Toast with explicit delay does not depend on render")
+	func explicitDelayDoesNotDependOnRender() {
+		let toast = StandardToast(text: BoneToast.TextConfig("Hi"), dismiss: .auto(delay: 5.0))
+		#expect(toast.dismissDelayDependsOnRender == false)
+	}
+
+	@Test("Toast with action button does not depend on render")
+	func actionButtonDoesNotDependOnRender() {
+		let toast = StandardToast(
+			text: BoneToast.TextConfig("Hi"),
+			actionButton: BoneToast.ActionButton("OK", action: {})
 		)
-		// Default symbolSize 12 + 8 + 8 padding = 28
-		#expect(button.resolvedWidth == 28)
+		#expect(toast.dismissDelayDependsOnRender == false)
 	}
 }

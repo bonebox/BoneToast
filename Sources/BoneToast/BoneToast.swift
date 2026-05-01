@@ -44,37 +44,19 @@ public enum BoneToast {
 		public static func edges(top: CGFloat = 0, leading: CGFloat = 0, bottom: CGFloat = 0, trailing: CGFloat = 0) -> BoneToast.Padding {
 			.custom(EdgeInsets(top: top, leading: leading, bottom: bottom, trailing: trailing))
 		}
-
-		/// Sum of leading + trailing insets. `.systemDefault` resolves to 16+16; `.none` to 0.
-		public var horizontalTotal: CGFloat {
-			switch self {
-				case .none: return 0
-				case .systemDefault: return 32
-				case .custom(let insets): return insets.leading + insets.trailing
-			}
-		}
 	}
-
-	/// Fallback scene width used by adaptive corner-style and dismiss-delay calculations
-	/// when no live scene width is available. Sized for a typical iPhone in portrait.
-	public static let defaultSceneWidth: CGFloat = 393
 	
 	// MARK: - Font
 
-	/// A `UIFont`-backed font wrapper used by toast text and action buttons.
+	/// A thin wrapper around `SwiftUI.Font` used by toast text and action buttons.
 	///
-	/// Backed by `UIFont` so the framework can perform render-time text measurement (used for
-	/// adaptive corner-style selection and dismiss-delay calculation). Provides a derived
-	/// `swiftUIFont` for use in SwiftUI `Text`.
+	/// All sizing decisions are made at render time by SwiftUI's layout engine, so this type
+	/// only needs to carry the visual font — no metrics introspection is required.
 	public struct Font: Sendable, Equatable {
-		public let uiFont: UIFont
+		public let swiftUIFont: SwiftUI.Font
 
-		/// SwiftUI `Font` derived from the underlying `UIFont`.
-		public var swiftUIFont: SwiftUI.Font { SwiftUI.Font(uiFont) }
-
-		/// Wrap an arbitrary `UIFont`.
-		public init(_ uiFont: UIFont) {
-			self.uiFont = uiFont
+		public init(_ swiftUIFont: SwiftUI.Font) {
+			self.swiftUIFont = swiftUIFont
 		}
 
 		/// System font with the given size, weight, and design.
@@ -83,34 +65,17 @@ public enum BoneToast {
 			weight: SwiftUI.Font.Weight = .regular,
 			design: SwiftUI.Font.Design = .default
 		) -> Self {
-			let base = UIFont.systemFont(ofSize: size, weight: weight.uiFontWeight)
-			if design == .default {
-				return Self(base)
-			}
-			let descriptor = base.fontDescriptor.withDesign(design.uiFontDescriptorDesign) ?? base.fontDescriptor
-			return Self(UIFont(descriptor: descriptor, size: size))
+			Self(.system(size: size, weight: weight, design: design))
 		}
 
 		/// Custom font by PostScript name. Falls back to system font of the same size if unavailable.
 		public static func custom(_ name: String, size: CGFloat) -> Self {
-			Self(UIFont(name: name, size: size) ?? .systemFont(ofSize: size))
+			Self(.custom(name, size: size))
 		}
 
-		/// Dynamic Type style with optional weight override.
-		public static func textStyle(
-			_ style: UIFont.TextStyle,
-			weight: UIFont.Weight? = nil
-		) -> Self {
-			let base = UIFont.preferredFont(forTextStyle: style)
-			guard let weight else { return Self(base) }
-			let descriptor = base.fontDescriptor.addingAttributes([
-				.traits: [UIFontDescriptor.TraitKey.weight: weight.rawValue]
-			])
-			return Self(UIFont(descriptor: descriptor, size: base.pointSize))
-		}
-
-		public static func == (lhs: Self, rhs: Self) -> Bool {
-			lhs.uiFont.isEqual(rhs.uiFont)
+		/// Convenience for SwiftUI text styles (Dynamic Type).
+		public static func textStyle(_ style: SwiftUI.Font.TextStyle) -> Self {
+			Self(.system(style))
 		}
 	}
 
@@ -268,6 +233,14 @@ public enum BoneToast {
 				case .trailing: .trailing
 			}
 		}
+
+		var frameAlignment: Alignment {
+			switch self {
+				case .leading: .leading
+				case .center: .center
+				case .trailing: .trailing
+			}
+		}
 	}
 	
 	// MARK: - Toast Button Shape
@@ -296,19 +269,6 @@ public enum BoneToast {
 		// Size constraints
 		public let minWidth: CGFloat?
 		public let maxWidth: CGFloat?
-
-		/// Measured width of the button's intrinsic content (text or symbol) plus horizontal content padding.
-		/// `nil` for the ViewBuilder initializer where the content can't be introspected — callers should
-		/// supply `minWidth` / `maxWidth` for accurate width estimation in that case.
-		internal let intrinsicContentWidth: CGFloat?
-
-		/// Best estimate of the button's rendered width, clamped by `minWidth` / `maxWidth`.
-		/// Falls back to `minWidth ?? 60` when intrinsic content width is unavailable.
-		internal var resolvedWidth: CGFloat {
-			let intrinsic = intrinsicContentWidth ?? (minWidth ?? 60)
-			let withMin = max(intrinsic, minWidth ?? 0)
-			return min(withMin, maxWidth ?? .greatestFiniteMagnitude)
-		}
 
 		// MARK: - Primary Initializer (ViewBuilder)
 
@@ -344,7 +304,6 @@ public enum BoneToast {
 			self.contentPadding = contentPadding
 			self.minWidth = minWidth
 			self.maxWidth = maxWidth
-			self.intrinsicContentWidth = nil
 		}
 
 		// MARK: - Convenience Initializer (Title String)
@@ -389,8 +348,6 @@ public enum BoneToast {
 			self.contentPadding = contentPadding
 			self.minWidth = minWidth
 			self.maxWidth = maxWidth
-			let textWidth = BoneTextMeasurement.singleLineWidth(text: title, uiFont: font.uiFont)
-			self.intrinsicContentWidth = textWidth + contentPadding.leading + contentPadding.trailing
 		}
 
 		// MARK: - Convenience Initializer (SF Symbol)
@@ -436,7 +393,6 @@ public enum BoneToast {
 			self.contentPadding = contentPadding
 			self.minWidth = minWidth
 			self.maxWidth = maxWidth
-			self.intrinsicContentWidth = symbolSize + contentPadding.leading + contentPadding.trailing
 		}
 	}
 	
@@ -466,34 +422,6 @@ public enum BoneToast {
 		public var effectiveSubtitleLineLimit: Int? {
 			guard let limit = subtitleLineLimit, limit > 0 else { return nil }
 			return limit
-		}
-
-		/// Number of lines the title actually occupies when rendered with `titleFont` at the given width.
-		public func measuredTitleLines(availableWidth: CGFloat) -> Int {
-			BoneTextMeasurement.lineCount(
-				text: title,
-				uiFont: titleFont.uiFont,
-				availableWidth: availableWidth,
-				lineLimit: titleLineLimit
-			)
-		}
-
-		/// Number of lines the subtitle actually occupies when rendered with `subtitleFont` at the given width.
-		/// Returns 0 if there is no subtitle.
-		public func measuredSubtitleLines(availableWidth: CGFloat) -> Int {
-			guard let sub = subtitle else { return 0 }
-			return BoneTextMeasurement.lineCount(
-				text: sub,
-				uiFont: subtitleFont.uiFont,
-				availableWidth: availableWidth,
-				lineLimit: subtitleLineLimit
-			)
-		}
-
-		/// Total number of rendered lines (title + subtitle) at the given text-area width.
-		public func measuredTotalLines(availableWidth: CGFloat) -> Int {
-			measuredTitleLines(availableWidth: availableWidth)
-				+ measuredSubtitleLines(availableWidth: availableWidth)
 		}
 
 		/// Creates a text configuration with title only
@@ -561,38 +489,15 @@ public enum BoneToast {
 		/// Never auto-dismiss; must be dismissed manually (tap or swipe)
 		case manual
 		
-		/// Calculates an appropriate delay based on the toast's actual rendered line count.
+		/// Calculates an appropriate delay based on the toast's rendered line count.
 		///
-		/// Lines are measured at the available text-area width: `sceneWidth − edgePadding −
-		/// nonTextWidthAllowance`. Falls back to `BoneToast.defaultSceneWidth` when no live
-		/// scene width is available.
-		///
-		/// - Parameters:
-		///   - textConfig: The text configuration to base timing on
-		///   - sceneWidth: The current scene width
-		///   - edgePaddingHorizontal: Combined leading + trailing edge padding
-		///   - nonTextWidthAllowance: Width consumed by non-text content (icons, action buttons, paddings)
-		/// - Returns: A delay based on rendered visible lines (minimum 3.0 seconds)
-		public static func calculatedDelay(
-			for textConfig: BoneToast.TextConfig,
-			sceneWidth: CGFloat = BoneToast.defaultSceneWidth,
-			edgePaddingHorizontal: CGFloat = 0,
-			nonTextWidthAllowance: CGFloat = 0
-		) -> TimeInterval {
-			let availableWidth = max(0, sceneWidth - edgePaddingHorizontal - nonTextWidthAllowance)
-			let titleLines = textConfig.measuredTitleLines(availableWidth: availableWidth)
-			let subtitleLines = textConfig.measuredSubtitleLines(availableWidth: availableWidth)
-
-			// Base time for first title line, then additional time per extra line
-			// Title lines: 3.0s base + 0.5s per additional line
-			// Subtitle lines: 0.5s per line
-			let titleTime: TimeInterval = 3.0 + Double(max(0, titleLines - 1)) * 0.5
-			let subtitleTime: TimeInterval = Double(subtitleLines) * 0.5
-
-			let calculated = titleTime + subtitleTime
-			let minTime: TimeInterval = 3.0
-
-			return max(calculated, minTime)
+		/// - Parameter lineCount: The total number of rendered text lines (title + subtitle).
+		/// - Returns: A delay based on visible lines (minimum 3.0 seconds, +0.5s per line beyond the first).
+		public static func calculatedDelay(lineCount: Int) -> TimeInterval {
+			let base: TimeInterval = 3.0
+			let perLine: TimeInterval = 0.5
+			let extra = Double(max(0, lineCount - 1)) * perLine
+			return base + extra
 		}
 	}
 	
@@ -916,22 +821,18 @@ public protocol BoneToastType: AnyObject, Identifiable, Observable where ID == U
 	/// Optional corner style override. When nil, uses adaptive style based on rendered line count.
 	var cornerStyleOverride: BoneToast.CornerStyle? { get }
 
-	/// Determines how and when the toast should be dismissed.
-	///
-	/// Concrete types should implement `resolvedDismissBehavior(sceneWidth:)` for measurement-based
-	/// delay calculation; this property is used for case checks (e.g. pinning) and falls back to
-	/// `BoneToast.defaultSceneWidth`.
+	/// Determines how and when the toast should be dismissed. For `.afterDelay` cases the actual
+	/// delay is computed by the manager from `measuredLineCount` once the toast renders.
 	var dismissBehavior: BoneToast.DismissBehavior { get }
 
-	/// Width allowance for non-text content (icons, action buttons, paddings, HStack spacing) used
-	/// when measuring text-area width for adaptive corner style and dismiss-delay calculations.
-	/// Default returns 0; concrete types should override to account for their layout.
-	var nonTextWidthAllowance: CGFloat { get }
+	/// Set by the rendered toast view when its line count is determined by SwiftUI's layout. Used
+	/// by the manager to calculate the dismiss delay. `nil` until the first render measurement.
+	var measuredLineCount: Int? { get set }
 
-	/// Set by the toast manager to the current scene width when this toast is presented (and updated
-	/// on scene size changes). Used by adaptive corner-style and dismiss-delay measurement so they
-	/// reflect the actual rendered width. Defaults to `BoneToast.defaultSceneWidth` until set.
-	var presentationSceneWidth: CGFloat { get set }
+	/// `true` when this toast's auto-calculated dismiss delay should wait for the first render
+	/// measurement before the manager starts the dismiss timer. Defaults to `false`; concrete
+	/// types should return `true` when their `dismissBehavior` is computed from `measuredLineCount`.
+	var dismissDelayDependsOnRender: Bool { get }
 
 	/// For toasts with `.whenReady` dismiss behavior, indicates when the toast is ready to dismiss
 	var isReadyToDismiss: Bool { get }
@@ -969,9 +870,8 @@ public extension BoneToastType {
 	/// Default implementation returns false - most toasts don't have action buttons
 	var hasActionButton: Bool { false }
 
-	/// Default implementation returns 0 — the protocol doesn't know about icon or action button
-	/// columns. Concrete types with those affordances should override.
-	var nonTextWidthAllowance: CGFloat { 0 }
+	/// Default implementation returns false - most toasts have a fixed or pre-known delay
+	var dismissDelayDependsOnRender: Bool { false }
 
 	/// Default interactive value based on dismiss behavior
 	var defaultInteractive: Bool {
@@ -980,25 +880,17 @@ public extension BoneToastType {
 			case .whenReady: return false
 		}
 	}
+}
 
-	/// Width of the text area available for line measurement, given the current `presentationSceneWidth`.
-	var availableTextWidth: CGFloat {
-		max(0, presentationSceneWidth - edgePadding.horizontalTotal - nonTextWidthAllowance)
-	}
-
-	/// Adaptive corner style based on the toast's rendered line count.
-	///
-	/// - Returns the explicit override if `cornerStyleOverride` is set.
-	/// - Otherwise measures title + subtitle lines at `availableTextWidth` and returns:
-	///   - `.capsule` for 1–2 total lines
-	///   - `.roundedRect(cornerRadius: 28)` for 3+ total lines
-	var cornerStyle: BoneToast.CornerStyle {
-		if let override = cornerStyleOverride {
-			return override
-		}
-		let totalLines = textConfig.measuredTotalLines(availableWidth: availableTextWidth)
-		return totalLines > 2 ? .roundedRect(cornerRadius: 28) : .capsule
-	}
+/// Resolves the corner style applied to a toast given its measured line count. The toast view
+/// layer drives this — concrete toast types only declare an optional override.
+internal func resolveCornerStyle(
+	override: BoneToast.CornerStyle?,
+	measuredLineCount: Int?
+) -> BoneToast.CornerStyle? {
+	if let override { return override }
+	guard let lines = measuredLineCount else { return nil }
+	return lines > 2 ? .roundedRect(cornerRadius: 28) : .capsule
 }
 
 // MARK: - Toast Shape & Modifiers
@@ -1035,10 +927,10 @@ private struct ToastWidthModifier: ViewModifier {
 private struct AdaptiveToastLayout: Layout {
 	func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
 		guard let subview = subviews.first else { return .zero }
-		
+
 		let idealSize = subview.sizeThatFits(.unspecified)
 		let proposedWidth = proposal.width ?? .infinity
-		
+
 		if idealSize.width <= proposedWidth {
 			return idealSize
 		} else {
@@ -1046,10 +938,117 @@ private struct AdaptiveToastLayout: Layout {
 			return CGSize(width: proposedWidth, height: constrainedSize.height)
 		}
 	}
-	
+
 	func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
 		guard let subview = subviews.first else { return }
 		subview.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+	}
+}
+
+// MARK: - Line Count Tracking
+
+/// Reference type that the rendered toast view uses to communicate the SwiftUI-measured line
+/// count back up to the toast view modifier so it can apply the correct corner style and to the
+/// toast manager so it can compute the dismiss delay accurately.
+@Observable
+@MainActor
+final class BoneToastLineCountTracker {
+	var lineCount: Int?
+}
+
+private struct BoneToastLineCountTrackerKey: EnvironmentKey {
+	static let defaultValue: BoneToastLineCountTracker? = nil
+}
+
+extension EnvironmentValues {
+	var boneToastLineCountTracker: BoneToastLineCountTracker? {
+		get { self[BoneToastLineCountTrackerKey.self] }
+		set { self[BoneToastLineCountTrackerKey.self] = newValue }
+	}
+}
+
+
+// MARK: - Text Stack Layout
+
+/// Stacks text subviews vertically with the given inter-line spacing AND, in the same pass,
+/// computes the actual rendered line count of each subview using SwiftUI's native sizing.
+///
+/// The line count for each subview is `round(multiLineHeight / singleLineHeight)` — i.e. the
+/// rendered height divided by the height of one line of the same text. Sums across subviews
+/// and writes the result into the tracker (asynchronously, to avoid mid-layout state mutation).
+///
+/// Because all measurements use `LayoutSubview.sizeThatFits`, the values match exactly what
+/// SwiftUI will render — no NSAttributedString / UIKit drift.
+private struct ToastTextStackLayout: Layout {
+	let lineSpacing: CGFloat
+	let tracker: BoneToastLineCountTracker?
+
+	func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+		let proposedWidth = proposal.width ?? .infinity
+		var totalHeight: CGFloat = 0
+		var totalLines = 0
+		var maxWidth: CGFloat = 0
+
+		for (idx, subview) in subviews.enumerated() {
+			let singleLine = subview.sizeThatFits(.unspecified)
+			let wrapped = subview.sizeThatFits(ProposedViewSize(width: proposedWidth, height: nil))
+			let lineHeight = singleLine.height > 0 ? singleLine.height : max(1, wrapped.height)
+			let lines = max(1, Int(round(wrapped.height / lineHeight)))
+			totalLines += lines
+			totalHeight += wrapped.height
+			if idx < subviews.count - 1 { totalHeight += lineSpacing }
+			maxWidth = max(maxWidth, wrapped.width)
+		}
+
+		// Only report the line count for finite-width proposals (the real layout pass). SwiftUI
+		// also calls `sizeThatFits` with `.unspecified` to compute the view's ideal size — at
+		// that proposal, text doesn't wrap and we'd write `1` line, then the next finite-width
+		// pass writes the real value, causing the tracker to oscillate. That oscillation cycles
+		// observers indefinitely with certain content (e.g. SF Symbols with multicolor or
+		// palette rendering), locking the main thread.
+		//
+		// The write is also deferred to a later runloop turn so the @Observable notification
+		// doesn't land in the same frame as `frameReporter`'s preference write, which would
+		// trigger "Bound preference tried to update multiple times per frame".
+		if let tracker, proposedWidth.isFinite {
+			let captured = totalLines
+			Task { @MainActor [tracker] in
+				if tracker.lineCount != captured { tracker.lineCount = captured }
+			}
+		}
+
+		return CGSize(width: maxWidth, height: totalHeight)
+	}
+
+	func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+		var y = bounds.minY
+		for (idx, subview) in subviews.enumerated() {
+			let wrapped = subview.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+			subview.place(
+				at: CGPoint(x: bounds.minX, y: y),
+				proposal: ProposedViewSize(width: bounds.width, height: wrapped.height)
+			)
+			y += wrapped.height
+			if idx < subviews.count - 1 { y += lineSpacing }
+		}
+	}
+}
+
+/// View that pulls the line-count tracker from the environment and feeds it into the layout.
+/// Layouts can't read `@Environment` directly, so this thin wrapper handles the bridging.
+///
+/// Horizontal alignment of the text within the available width is the parent's responsibility
+/// (via `frame(maxWidth:alignment:)` or the HStack arrangement) — the layout itself places its
+/// subviews leading-aligned within its bounds.
+private struct ToastTextStack<Content: View>: View {
+	let lineSpacing: CGFloat
+	@ViewBuilder var content: () -> Content
+	@Environment(\.boneToastLineCountTracker) private var tracker
+
+	var body: some View {
+		ToastTextStackLayout(lineSpacing: lineSpacing, tracker: tracker) {
+			content()
+		}
 	}
 }
 
@@ -1097,34 +1096,29 @@ private struct BoneEffectModifier: ViewModifier {
 	let cornerStyle: BoneToast.CornerStyle
 	let glassStyle: BoneToast.EffectStyle
 	let tintColor: Color?
-	
-	@ViewBuilder
-	func body(content: Content) -> some View {
+
+	private var shape: AnyShape {
 		switch cornerStyle {
 			case .capsule:
-				switch (glassStyle, tintColor) {
-					case (.regular, .some(let color)):
-						content.glassEffect(.regular.tint(color), in: Capsule())
-					case (.regular, .none):
-						content.glassEffect(.regular, in: Capsule())
-					case (.clear, .some(let color)):
-						content.glassEffect(.clear.tint(color), in: Capsule())
-					case (.clear, .none):
-						content.glassEffect(.clear, in: Capsule())
-				}
+				return AnyShape(Capsule())
 			case .roundedRect(let cornerRadius):
-				let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-				switch (glassStyle, tintColor) {
-					case (.regular, .some(let color)):
-						content.glassEffect(.regular.tint(color), in: shape)
-					case (.regular, .none):
-						content.glassEffect(.regular, in: shape)
-					case (.clear, .some(let color)):
-						content.glassEffect(.clear.tint(color), in: shape)
-					case (.clear, .none):
-						content.glassEffect(.clear, in: shape)
-				}
+				return AnyShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
 		}
+	}
+
+	private var glass: Glass {
+		let base: Glass = (glassStyle == .regular) ? .regular : .clear
+		if let tintColor {
+			return base.tint(tintColor)
+		}
+		return base
+	}
+
+	// A single, structurally-stable `glassEffect(_:in:)` call so SwiftUI sees the same view
+	// identity across corner-style changes — this preserves the toast's enter transition when
+	// the auto corner-style updates after the first measurement frame.
+	func body(content: Content) -> some View {
+		content.glassEffect(glass, in: shape)
 	}
 }
 
@@ -1335,30 +1329,12 @@ public final class StandardToast: BoneToastType {
 	/// Whether the toast can be interactively dismissed (tap/swipe)
 	public var interactive: Bool
 
-	/// Set by the toast manager to the current scene width at presentation time. Used by
-	/// adaptive corner-style and dismiss-delay measurement.
-	public var presentationSceneWidth: CGFloat = BoneToast.defaultSceneWidth
+	/// Set by the rendered toast view when SwiftUI's layout determines the actual line count.
+	/// Used by the manager to compute dismiss delay. `nil` until first render measurement.
+	public var measuredLineCount: Int?
 
 	/// Whether this toast has an action button
 	public var hasActionButton: Bool { actionButton != nil }
-
-	/// Spacing between elements in the toast HStack (icon ↔ text ↔ button).
-	/// Mirrors the layout used in the toast content view.
-	private static let hstackSpacing: CGFloat = 8
-
-	/// Width allowance summed from the icon column, action button column, content padding, and
-	/// HStack spacing. Used to compute the text-area width for adaptive corner-style and
-	/// dismiss-delay measurement.
-	public var nonTextWidthAllowance: CGFloat {
-		var allowance: CGFloat = contentPadding.horizontalTotal
-		if systemImage != nil || iconBuilder != nil {
-			allowance += systemImageSize + Self.hstackSpacing
-		}
-		if let actionButton {
-			allowance += actionButton.resolvedWidth + Self.hstackSpacing
-		}
-		return allowance
-	}
 
 	/// Resolved title color (uses backgroundStyle default if not specified)
 	public var titleColor: Color {
@@ -1373,24 +1349,34 @@ public final class StandardToast: BoneToastType {
 	public var dismissBehavior: BoneToast.DismissBehavior {
 		switch dismissStyle {
 			case .auto(let delay):
-				// If action button is present and no explicit delay, use brief delay (0.5s) after button tap
+				// If action button is present and no explicit delay, use brief delay (0.2s) after button tap
 				if actionButton != nil && delay == nil {
 					return .afterDelay(0.2)
 				}
-				let resolvedDelay = delay ?? BoneToast.StandardDismiss.calculatedDelay(
-					for: textConfig,
-					sceneWidth: presentationSceneWidth,
-					edgePaddingHorizontal: edgePadding.horizontalTotal,
-					nonTextWidthAllowance: nonTextWidthAllowance
-				)
-				return .afterDelay(resolvedDelay)
+				if let delay {
+					return .afterDelay(delay)
+				}
+				// Compute delay from rendered line count. Defaults to 1 line until measurement
+				// arrives; the manager observes `measuredLineCount` and re-schedules if it changes.
+				let lines = measuredLineCount ?? 1
+				return .afterDelay(BoneToast.StandardDismiss.calculatedDelay(lineCount: lines))
 			case .manual:
 				return .manual
 		}
 	}
 	
+	/// Auto-style standard toasts without an explicit delay or action button compute their
+	/// dismiss delay from the rendered line count, so the manager waits for the first render
+	/// before starting the timer.
+	public var dismissDelayDependsOnRender: Bool {
+		if case .auto(nil) = dismissStyle, actionButton == nil {
+			return true
+		}
+		return false
+	}
+
 	public var isReadyToDismiss: Bool { true }
-	
+
 	// MARK: - Primary Initializer
 	
 	/// Creates a standard toast with full text configuration.
@@ -1606,9 +1592,18 @@ public final class StandardToast: BoneToastType {
 					Spacer(minLength: 0)
 				}
 				iconView
-				textView
+				if actionButton != nil {
+					// Stretch the text's horizontal frame so that when the toast is granted more
+					// width than the text needs (e.g. multi-line subtitle wraps the toast to full
+					// width), the action button is pushed to the trailing edge instead of hugging
+					// the text. With an unspecified-width proposal (single-line case), this
+					// modifier does not affect intrinsic sizing — the toast still hugs content.
+					textView
+						.frame(maxWidth: .infinity, alignment: textConfig.alignment.frameAlignment)
+				} else {
+					textView
+				}
 				if let actionButton {
-					// Consistent 8pt spacing between text and button (from HStack spacing)
 					ActionButtonView(
 						config: actionButton,
 						toastBackgroundStyle: backgroundStyle,
@@ -1626,19 +1621,25 @@ public final class StandardToast: BoneToastType {
 	
 	@MainActor @ViewBuilder
 	private var textView: some View {
-		VStack(alignment: textConfig.alignment.horizontalAlignment, spacing: 2) {
-			Text(textConfig.title)
-				.font(textConfig.titleFont.swiftUIFont)
-				.foregroundColor(titleColor)
-				.lineLimit(textConfig.effectiveTitleLineLimit)
-				.multilineTextAlignment(textConfig.alignment.textAlignment)
+		// `ToastTextStack` uses a custom Layout that stacks the title (and optional subtitle)
+		// vertically with 2pt spacing AND, in the same pass, computes the actual rendered line
+		// count via SwiftUI's native `LayoutSubview.sizeThatFits`. The result is written into the
+		// environment-injected line-count tracker, which the toast view modifier reads to choose
+		// the corner style. Because every measurement here uses SwiftUI's own renderer, the line
+		// count matches what the user sees — no UIKit / NSAttributedString drift.
+		ToastTextStack(lineSpacing: 2) {
+			Text(self.textConfig.title)
+				.font(self.textConfig.titleFont.swiftUIFont)
+				.foregroundColor(self.titleColor)
+				.lineLimit(self.textConfig.effectiveTitleLineLimit)
+				.multilineTextAlignment(self.textConfig.alignment.textAlignment)
 
-			if let subtitle = textConfig.subtitle {
+			if let subtitle = self.textConfig.subtitle {
 				Text(subtitle)
-					.font(textConfig.subtitleFont.swiftUIFont)
-					.foregroundColor(subtitleColor)
-					.lineLimit(textConfig.effectiveSubtitleLineLimit)
-					.multilineTextAlignment(textConfig.alignment.textAlignment)
+					.font(self.textConfig.subtitleFont.swiftUIFont)
+					.foregroundColor(self.subtitleColor)
+					.lineLimit(self.textConfig.effectiveSubtitleLineLimit)
+					.multilineTextAlignment(self.textConfig.alignment.textAlignment)
 			}
 		}
 	}
@@ -2339,23 +2340,10 @@ public class CompletableToast: CompletableBoneToastType {
 	/// Whether the action button was tapped (triggers dismissal)
 	public var actionButtonTapped: Bool = false
 
-	/// Set by the toast manager to the current scene width at presentation time. Used by
-	/// adaptive corner-style measurement.
-	public var presentationSceneWidth: CGFloat = BoneToast.defaultSceneWidth
-
-	/// Spacing between elements in the completable toast HStack (icon ↔ text ↔ button).
-	private static let hstackSpacing: CGFloat = 8
-
-	/// Width allowance summed from the icon column, action button column, and content padding.
-	public var nonTextWidthAllowance: CGFloat {
-		var allowance: CGFloat = contentPadding.horizontalTotal
-		// CompletableToast always has an icon column for the symbol
-		allowance += symbolSize + Self.hstackSpacing
-		if let actionButton = currentActionButton {
-			allowance += actionButton.resolvedWidth + Self.hstackSpacing
-		}
-		return allowance
-	}
+	/// Set by the rendered toast view when SwiftUI's layout determines the actual line count.
+	/// CompletableToast doesn't currently use this for delay (its delay is fixed via
+	/// `dismissDelayAfterCompletion`), but it satisfies the protocol requirement.
+	public var measuredLineCount: Int?
 	
 	// MARK: - Computed Styling
 	
@@ -3274,6 +3262,7 @@ private struct CompletableToastContentView<Toast: CompletableBoneToastType>: Vie
 	@Bindable var toast: Toast
 	
 	var body: some View {
+		let hasActionButton = toast.currentActionButton != nil
 		// Consistent spacing of 8 between all elements (icon ↔ text ↔ button)
 		HStack(spacing: 8) {
 			toast.iconView
@@ -3284,6 +3273,10 @@ private struct CompletableToastContentView<Toast: CompletableBoneToastType>: Vie
 				.lineLimit(1)
 				.contentTransition(.interpolate)
 				.animation(.smooth(duration: 0.15), value: toast.message)
+				// When an action button is present, stretch the text frame so the button is
+				// pushed to the trailing edge whenever the toast is granted more width than
+				// the text needs.
+				.frame(maxWidth: hasActionButton ? .infinity : nil, alignment: toast.textAlignment.frameAlignment)
 			if let actionButton = toast.currentActionButton {
 				ActionButtonView(
 					config: actionButton,
@@ -3311,8 +3304,10 @@ private struct CompletableToastBackgroundModifier<Toast: CompletableBoneToastTyp
 	func body(content: Content) -> some View {
 		let state = toast.phase
 		let backgroundStyle = toast.backgroundStyle
-		let cornerStyle = toast.cornerStyle
-		
+		// CompletableToast renders a single-line message, so line count is always 1. Honor an
+		// explicit override; otherwise use a capsule.
+		let cornerStyle = toast.cornerStyleOverride ?? .capsule
+
 		// Extract current tint color
 		let currentColor: Color = {
 			switch backgroundStyle {
@@ -3346,14 +3341,19 @@ private struct BoneOverlayModifier: ViewModifier {
 		return .regular
 	}
 	
+	private var shape: AnyShape {
+		switch cornerStyle {
+			case .capsule:
+				return AnyShape(Capsule())
+			case .roundedRect(let r):
+				return AnyShape(RoundedRectangle(cornerRadius: r, style: .continuous))
+		}
+	}
+
 	func body(content: Content) -> some View {
 		if #available(iOS 26.0, *), isGlass {
-			switch cornerStyle {
-				case .capsule:
-					content.glassEffect(glassStyle == .regular ? .regular : .clear, in: Capsule())
-				case .roundedRect(let r):
-					content.glassEffect(glassStyle == .regular ? .regular : .clear, in: RoundedRectangle(cornerRadius: r, style: .continuous))
-			}
+			let glass: Glass = (glassStyle == .regular) ? .regular : .clear
+			content.glassEffect(glass, in: shape)
 		} else {
 			content
 		}
@@ -3734,9 +3734,9 @@ private struct GlobalToastContainerView: View {
 
 			ZStack(alignment: .top) {
 				Color.clear
-					.onAppear { manager.currentSceneWidth = outerGeometry.size.width }
+					.onAppear { manager.sceneWidth = outerGeometry.size.width }
 					.onChange(of: outerGeometry.size.width, initial: false) { _, newWidth in
-						manager.currentSceneWidth = newWidth
+						manager.sceneWidth = newWidth
 					}
 				
 				// Top toasts
@@ -3811,10 +3811,11 @@ private struct AnyToastViewForWindow: View {
 	let transition: BoneToast.Transition
 	let timing: BoneToast.Timing
 	let onDismiss: () -> Void
-	
+
 	@State private var dragOffset: CGFloat = 0
+	@State private var lineCountTracker = BoneToastLineCountTracker()
 	private let dismissThreshold: CGFloat = 50
-	
+
 	/// Convert edge padding to horizontal-only padding for window presentation
 	private var horizontalPadding: EdgeInsets {
 		switch toast.edgePadding {
@@ -3826,14 +3827,22 @@ private struct AnyToastViewForWindow: View {
 				return EdgeInsets(top: 0, leading: insets.leading, bottom: 0, trailing: insets.trailing)
 		}
 	}
-	
+
+	private var resolvedCornerStyle: BoneToast.CornerStyle {
+		resolveCornerStyle(
+			override: toast.cornerStyleOverride,
+			measuredLineCount: lineCountTracker.lineCount
+		) ?? .capsule
+	}
+
 	var body: some View {
 		toast.content
+			.environment(\.boneToastLineCountTracker, lineCountTracker)
 			.modifier(ToastWidthModifier(expandWidth: toast.expandWidth))
 			.modifier(ConditionalBackgroundModifier(
 				applyBackground: !toast.contentIncludesBackground,
 				backgroundStyle: toast.backgroundStyle,
-				cornerStyle: toast.cornerStyle
+				cornerStyle: resolvedCornerStyle
 			))
 			.padding(horizontalPadding)
 			.contentShape(Rectangle())
@@ -3841,6 +3850,11 @@ private struct AnyToastViewForWindow: View {
 			.gesture(swipeGesture)
 			.onTapGesture(perform: handleTap)
 			.overlay(frameReporter)
+			.onChange(of: lineCountTracker.lineCount) { _, newValue in
+				// Plumb the measured line count back to the model so the manager can use it
+				// for accurate dismiss-delay calculation.
+				toast.measuredLineCount = newValue
+			}
 	}
 	
 	private var frameReporter: some View {
@@ -3981,18 +3995,10 @@ public final class BoneToastManager {
 	/// Controls how new toasts are stacked relative to existing ones
 	public var stackOrder: BoneToast.StackOrder
 
-	/// Current scene width — propagated to each toast's `presentationSceneWidth` so adaptive
-	/// corner-style and dismiss-delay calculations reflect the actual rendered width. Updated
-	/// from the global window's bounds (in global mode) or via the scoped overlay's geometry
-	/// (in scoped mode).
-	public var currentSceneWidth: CGFloat = BoneToast.defaultSceneWidth {
-		didSet {
-			guard currentSceneWidth != oldValue else { return }
-			for toast in toasts {
-				toast.presentationSceneWidth = currentSceneWidth
-			}
-		}
-	}
+	/// Latest known width of the scene/container the toasts render in. Used for off-tree
+	/// pre-measurement so the corner style is correct on the first rendered frame. Default of
+	/// 393 (iPhone portrait) is used until a real measurement arrives.
+	internal var sceneWidth: CGFloat = 393
 
 	// MARK: - Initialization
 	
@@ -4050,10 +4056,6 @@ public final class BoneToastManager {
 		if isGlobal && !isSetup {
 			setup()
 		}
-
-		// Seed the toast's presentation scene width so that auto corner-style and dismiss-delay
-		// calculations measure against the actual rendered width from the very first frame.
-		toast.presentationSceneWidth = currentSceneWidth
 
 		let effectiveTiming = toast.animationConfig?.timing ?? animationConfig.timing
 		withAnimation(effectiveTiming.animation) {
@@ -4138,6 +4140,26 @@ public final class BoneToastManager {
 						self?.dismiss(id: toast.id)
 					}
 					actionButtonTasks[toast.id] = task
+				} else if toast.dismissDelayDependsOnRender {
+					// Wait for the first render measurement so the delay reflects the actual rendered
+					// line count. Re-fetch `dismissBehavior` after measurement settles.
+					let task = Task { [weak self] in
+						let timeoutDeadline = ContinuousClock.now.advanced(by: .milliseconds(250))
+						while !Task.isCancelled && toast.measuredLineCount == nil && ContinuousClock.now < timeoutDeadline {
+							try? await Task.sleep(for: .milliseconds(16))
+						}
+						guard !Task.isCancelled else { return }
+						let resolvedDelay: TimeInterval
+						if case .afterDelay(let updated) = toast.dismissBehavior {
+							resolvedDelay = updated
+						} else {
+							resolvedDelay = delay
+						}
+						try? await Task.sleep(for: .seconds(resolvedDelay))
+						guard !Task.isCancelled else { return }
+						self?.dismiss(id: toast.id)
+					}
+					dismissTasks[toast.id] = task
 				} else {
 					// For regular toasts: start delay immediately
 					let task = Task { [weak self] in
@@ -4178,10 +4200,11 @@ private struct AnyToastView: View {
 	let transition: BoneToast.Transition
 	let timing: BoneToast.Timing
 	let onDismiss: () -> Void
-	
+
 	@State private var dragOffset: CGFloat = 0
+	@State private var lineCountTracker = BoneToastLineCountTracker()
 	private let dismissThreshold: CGFloat = 50
-	
+
 	/// Convert edge padding to horizontal-only for stacked toasts
 	private var horizontalPadding: EdgeInsets {
 		switch toast.edgePadding {
@@ -4193,14 +4216,22 @@ private struct AnyToastView: View {
 				return EdgeInsets(top: 0, leading: insets.leading, bottom: 0, trailing: insets.trailing)
 		}
 	}
-	
+
+	private var resolvedCornerStyle: BoneToast.CornerStyle {
+		resolveCornerStyle(
+			override: toast.cornerStyleOverride,
+			measuredLineCount: lineCountTracker.lineCount
+		) ?? .capsule
+	}
+
 	var body: some View {
 		toast.content
+			.environment(\.boneToastLineCountTracker, lineCountTracker)
 			.modifier(ToastWidthModifier(expandWidth: toast.expandWidth))
 			.modifier(ConditionalBackgroundModifier(
 				applyBackground: !toast.contentIncludesBackground,
 				backgroundStyle: toast.backgroundStyle,
-				cornerStyle: toast.cornerStyle
+				cornerStyle: resolvedCornerStyle
 			))
 			.padding(horizontalPadding)
 			.contentShape(Rectangle())
@@ -4208,8 +4239,11 @@ private struct AnyToastView: View {
 			.gesture(swipeGesture)
 			.onTapGesture(perform: handleTap)
 			.overlay(frameReporter)
+			.onChange(of: lineCountTracker.lineCount) { _, newValue in
+				toast.measuredLineCount = newValue
+			}
 	}
-	
+
 	private var frameReporter: some View {
 		GeometryReader { geometry in
 			Color.clear
@@ -4337,15 +4371,15 @@ private struct BoneToastOverlayModifier: ViewModifier {
 				.padding(position == .top ? .top : .bottom)
 			}
 			.background {
-				// Capture host content width as the scene width for adaptive corner-style measurement.
-				// Only the .top overlay reports — both run with the same geometry, but writing through
-				// `didSet` is idempotent so duplicates would be no-ops anyway.
+				// Track host content width as the scene width for off-tree pre-measurement.
+				// Only the .top overlay reports — both run with identical geometry, and
+				// duplicate writes are no-ops when the value is unchanged.
 				if position == .top {
 					GeometryReader { geo in
 						Color.clear
-							.onAppear { manager.currentSceneWidth = geo.size.width }
+							.onAppear { manager.sceneWidth = geo.size.width }
 							.onChange(of: geo.size.width, initial: false) { _, newWidth in
-								manager.currentSceneWidth = newWidth
+								manager.sceneWidth = newWidth
 							}
 					}
 					.allowsHitTesting(false)
@@ -4444,77 +4478,4 @@ private struct ToastFramePreferenceKey: PreferenceKey {
 	}
 }
 
-// MARK: - Font Mapping Helpers
-
-internal extension SwiftUI.Font.Weight {
-	var uiFontWeight: UIFont.Weight {
-		switch self {
-			case .ultraLight: return .ultraLight
-			case .thin: return .thin
-			case .light: return .light
-			case .regular: return .regular
-			case .medium: return .medium
-			case .semibold: return .semibold
-			case .bold: return .bold
-			case .heavy: return .heavy
-			case .black: return .black
-			default: return .regular
-		}
-	}
-}
-
-internal extension SwiftUI.Font.Design {
-	var uiFontDescriptorDesign: UIFontDescriptor.SystemDesign {
-		switch self {
-			case .default: return .default
-			case .serif: return .serif
-			case .rounded: return .rounded
-			case .monospaced: return .monospaced
-			@unknown default: return .default
-		}
-	}
-}
-
-// MARK: - Text Measurement
-
-/// Measures the visible line count of a piece of text rendered with a given font at a given width.
-///
-/// Used by the auto corner-style and auto dismiss-delay logic to determine how many lines a string
-/// will actually occupy when rendered, accounting for font size and the available text-area width
-/// (i.e. toast width minus icon, action button, and paddings).
-internal enum BoneTextMeasurement {
-	static func lineCount(
-		text: String,
-		uiFont: UIFont,
-		availableWidth: CGFloat,
-		lineLimit: Int? = nil
-	) -> Int {
-		guard !text.isEmpty, availableWidth > 0 else { return 0 }
-		let bounds = (text as NSString).boundingRect(
-			with: CGSize(width: availableWidth, height: CGFloat.greatestFiniteMagnitude),
-			options: [.usesLineFragmentOrigin, .usesFontLeading],
-			attributes: [.font: uiFont],
-			context: nil
-		)
-		let lineHeight = uiFont.lineHeight > 0 ? uiFont.lineHeight : uiFont.pointSize
-		let measured = max(1, Int(ceil(bounds.height / lineHeight)))
-		if let limit = lineLimit, limit > 0 {
-			return min(measured, limit)
-		}
-		return measured
-	}
-
-	/// Width of a piece of text rendered on a single line with the given font (no wrapping).
-	/// Used to estimate the intrinsic content width of action buttons.
-	static func singleLineWidth(text: String, uiFont: UIFont) -> CGFloat {
-		guard !text.isEmpty else { return 0 }
-		let bounds = (text as NSString).boundingRect(
-			with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
-			options: [.usesLineFragmentOrigin, .usesFontLeading],
-			attributes: [.font: uiFont],
-			context: nil
-		)
-		return ceil(bounds.width)
-	}
-}
 
