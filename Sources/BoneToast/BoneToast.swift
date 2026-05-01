@@ -1836,7 +1836,7 @@ public final class StandardToast: BoneToastType {
 		StandardToast(
 			message,
 			systemImage: "exclamationmark.triangle.fill",
-			backgroundStyle: BoneToast.BackgroundStyle.glass(tintColor: .red),
+			backgroundStyle: BoneToast.BackgroundStyle.glass(tintColor: .red.opacity(0.8)),
 			position: position,
 			dismiss: dismiss
 		)
@@ -1846,7 +1846,7 @@ public final class StandardToast: BoneToastType {
 		StandardToast(
 			message,
 			systemImage: "checkmark.circle.fill",
-			backgroundStyle: BoneToast.BackgroundStyle.glass(tintColor: .green),
+			backgroundStyle: BoneToast.BackgroundStyle.glass(tintColor: .green.opacity(0.8)),
 			position: position,
 			dismiss: dismiss
 		)
@@ -1856,7 +1856,7 @@ public final class StandardToast: BoneToastType {
 		StandardToast(
 			message,
 			systemImage: "exclamationmark.triangle.fill",
-			backgroundStyle: BoneToast.BackgroundStyle.glass(tintColor: .orange),
+			backgroundStyle: BoneToast.BackgroundStyle.glass(tintColor: .orange.opacity(0.8)),
 			position: position,
 			dismiss: dismiss
 		)
@@ -1866,7 +1866,7 @@ public final class StandardToast: BoneToastType {
 		StandardToast(
 			message,
 			systemImage: "info.circle.fill",
-			backgroundStyle: BoneToast.BackgroundStyle.glass(tintColor: .blue),
+			backgroundStyle: BoneToast.BackgroundStyle.glass(tintColor: .blue.opacity(0.8)),
 			position: position,
 			dismiss: dismiss
 		)
@@ -2831,7 +2831,7 @@ public class CompletableToast: CompletableBoneToastType {
 		} else if failure.isEnabled {
 			// Inherit style type from base, apply red tint
 			switch backgroundStyle {
-				case .glass: .glass(tintColor: .red)
+				case .glass: .glass(tintColor: .red.opacity(0.8))
 				case .solid: .solid(.red)
 			}
 		} else {
@@ -3094,7 +3094,7 @@ public final class ProgressToast: CompletableToast {
 			resolvedFailureConfig = explicit
 		} else {
 			let redBackground: BoneToast.BackgroundStyle = switch backgroundStyle {
-				case .glass: .glass(tintColor: .red)
+				case .glass: .glass(tintColor: .red.opacity(0.8))
 				case .solid: .solid(.red)
 			}
 			resolvedFailureConfig = ToastPhaseConfig(backgroundStyle: redBackground)
@@ -3237,7 +3237,7 @@ public final class ActivityToast: CompletableToast {
 			resolvedFailureConfig = explicit
 		} else {
 			let redBackground: BoneToast.BackgroundStyle = switch backgroundStyle {
-				case .glass: .glass(tintColor: .red)
+				case .glass: .glass(tintColor: .red.opacity(0.8))
 				case .solid: .solid(.red)
 			}
 			resolvedFailureConfig = ToastPhaseConfig(backgroundStyle: redBackground)
