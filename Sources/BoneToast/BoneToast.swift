@@ -290,8 +290,8 @@ public enum BoneToast {
 			fontColor: Color? = nil,
 			font: BoneToast.Font = .system(size: 14, weight: .semibold),
 			shape: BoneToast.ButtonShape = .capsule,
-			contentPadding: EdgeInsets = EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12),
-			minWidth: CGFloat? = 60,
+			contentPadding: EdgeInsets = EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8),
+			minWidth: CGFloat? = 44,
 			maxWidth: CGFloat? = nil,
 			@ViewBuilder content: @escaping @MainActor () -> Content
 		) {
@@ -327,8 +327,8 @@ public enum BoneToast {
 			fontColor: Color? = nil,
 			font: BoneToast.Font = .system(size: 14, weight: .semibold),
 			shape: BoneToast.ButtonShape = .capsule,
-			contentPadding: EdgeInsets = EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12),
-			minWidth: CGFloat? = 60,
+			contentPadding: EdgeInsets = EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8),
+			minWidth: CGFloat? = 44,
 			maxWidth: CGFloat? = nil
 		) {
 			let resolvedFontColor = fontColor ?? .white
@@ -1052,6 +1052,176 @@ private struct ToastTextStack<Content: View>: View {
 	}
 }
 
+// MARK: - Toast Body Layout
+
+/// Tag for subviews of `ToastBodyLayout` so the layout can sort children into icon / text / button.
+private enum ToastBodyRole: Sendable {
+	case icon
+	case text
+	case button
+}
+
+private struct ToastBodyRoleLayoutValueKey: LayoutValueKey {
+	static let defaultValue: ToastBodyRole = .text
+}
+
+extension View {
+	fileprivate func toastBodyRole(_ role: ToastBodyRole) -> some View {
+		layoutValue(key: ToastBodyRoleLayoutValueKey.self, value: role)
+	}
+}
+
+/// Lays out a toast row as `[icon][iconGap][text][buttonGap][button]` where the icon and button
+/// take their intrinsic widths and the text fills the remaining width. Replaces an `HStack`
+/// with `.frame(maxWidth: .infinity)` on the text — that combination interacts unpredictably
+/// with SwiftUI's HStack distribution, sometimes giving the text less width than the toast's
+/// geometry actually permits and producing premature word wraps. This layout assigns the text
+/// exactly `proposedWidth − iconWidth − buttonWidth − iconGap − buttonGap`, which is the
+/// largest width that physically fits, and rendering matches.
+private struct ToastBodyLayout: Layout {
+	let spacing: CGFloat
+	let textLineSpacing: CGFloat
+	let tracker: BoneToastLineCountTracker?
+
+	func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+		let buckets = bucket(subviews)
+		let proposedWidth = proposal.width ?? .infinity
+
+		let iconSizes = buckets.icons.map { $0.sizeThatFits(.unspecified) }
+		let buttonSizes = buckets.buttons.map { $0.sizeThatFits(.unspecified) }
+
+		let iconWidth = iconSizes.reduce(0) { $0 + $1.width }
+		let buttonWidth = buttonSizes.reduce(0) { $0 + $1.width }
+		let iconGap = buckets.icons.isEmpty ? 0 : spacing
+		let buttonGap = buckets.buttons.isEmpty ? 0 : spacing
+
+		// For finite proposals (the real layout pass), give the text exactly the leftover width.
+		// For unspecified proposals (idealSize queries from the parent), report the *unwrapped*
+		// natural width so the parent layout (e.g. AdaptiveToastLayout) can correctly decide
+		// whether to hug content or expand to fill — matching how an HStack would have behaved
+		// here. Without this, a long subtitle's natural width is hidden, AdaptiveToastLayout
+		// thinks the row is tiny, and the toast collapses to a narrow column that the subtitle
+		// then wraps inside of, spilling over the toast's height.
+		let textNaturalSizes = buckets.texts.map { $0.sizeThatFits(.unspecified) }
+		let textNaturalWidthMax = textNaturalSizes.map(\.width).max() ?? 0
+		let textWidth: CGFloat
+		if proposedWidth.isFinite {
+			textWidth = max(0, proposedWidth - iconWidth - buttonWidth - iconGap - buttonGap)
+		} else {
+			textWidth = textNaturalWidthMax
+		}
+
+		var totalLines = 0
+		var totalTextHeight: CGFloat = 0
+		for (idx, text) in buckets.texts.enumerated() {
+			let singleLine = textNaturalSizes[idx]
+			let wrapped = text.sizeThatFits(ProposedViewSize(width: textWidth, height: nil))
+			let lineHeight = singleLine.height > 0 ? singleLine.height : max(1, wrapped.height)
+			totalLines += max(1, Int(round(wrapped.height / lineHeight)))
+			totalTextHeight += wrapped.height
+			if idx < buckets.texts.count - 1 { totalTextHeight += textLineSpacing }
+		}
+
+		// Only update the tracker for finite-width proposals (the real layout pass) and only
+		// when the row actually has text, so that idealSize-style measurement passes don't
+		// oscillate the value and re-render the world.
+		if proposedWidth.isFinite, !buckets.texts.isEmpty, let tracker {
+			let captured = totalLines
+			Task { @MainActor [tracker] in
+				if tracker.lineCount != captured { tracker.lineCount = captured }
+			}
+		}
+
+		let maxColumnHeight = max(
+			iconSizes.map(\.height).max() ?? 0,
+			totalTextHeight,
+			buttonSizes.map(\.height).max() ?? 0
+		)
+		let totalWidth = proposedWidth.isFinite
+			? proposedWidth
+			: iconWidth + buttonWidth + iconGap + buttonGap + textNaturalWidthMax
+		return CGSize(width: totalWidth, height: maxColumnHeight)
+	}
+
+	func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+		let buckets = bucket(subviews)
+
+		let iconSizes = buckets.icons.map { $0.sizeThatFits(.unspecified) }
+		let buttonSizes = buckets.buttons.map { $0.sizeThatFits(.unspecified) }
+		let iconWidth = iconSizes.reduce(0) { $0 + $1.width }
+		let buttonWidth = buttonSizes.reduce(0) { $0 + $1.width }
+		let iconGap = buckets.icons.isEmpty ? 0 : spacing
+		let buttonGap = buckets.buttons.isEmpty ? 0 : spacing
+		let textWidth = max(0, bounds.width - iconWidth - buttonWidth - iconGap - buttonGap)
+
+		var x = bounds.minX
+
+		// Icons leading
+		for (i, icon) in buckets.icons.enumerated() {
+			let size = iconSizes[i]
+			icon.place(
+				at: CGPoint(x: x, y: bounds.midY - size.height / 2),
+				proposal: ProposedViewSize(size)
+			)
+			x += size.width
+		}
+		if !buckets.icons.isEmpty { x += spacing }
+
+		// Texts in the middle column
+		let textSizes = buckets.texts.map { $0.sizeThatFits(ProposedViewSize(width: textWidth, height: nil)) }
+		let totalTextHeight = textSizes.map(\.height).reduce(0, +) + CGFloat(max(0, buckets.texts.count - 1)) * textLineSpacing
+		var textY = bounds.midY - totalTextHeight / 2
+		for (i, text) in buckets.texts.enumerated() {
+			let size = textSizes[i]
+			text.place(
+				at: CGPoint(x: x, y: textY),
+				proposal: ProposedViewSize(width: textWidth, height: size.height)
+			)
+			textY += size.height + textLineSpacing
+		}
+		x += textWidth
+		if !buckets.buttons.isEmpty { x += spacing }
+
+		// Buttons trailing
+		for (i, button) in buckets.buttons.enumerated() {
+			let size = buttonSizes[i]
+			button.place(
+				at: CGPoint(x: x, y: bounds.midY - size.height / 2),
+				proposal: ProposedViewSize(size)
+			)
+			x += size.width
+		}
+	}
+
+	private func bucket(_ subviews: Subviews) -> (icons: [LayoutSubview], texts: [LayoutSubview], buttons: [LayoutSubview]) {
+		var icons: [LayoutSubview] = []
+		var texts: [LayoutSubview] = []
+		var buttons: [LayoutSubview] = []
+		for sub in subviews {
+			switch sub[ToastBodyRoleLayoutValueKey.self] {
+				case .icon: icons.append(sub)
+				case .text: texts.append(sub)
+				case .button: buttons.append(sub)
+			}
+		}
+		return (icons, texts, buttons)
+	}
+}
+
+/// View wrapper that pulls the line-count tracker from the environment and feeds it into the
+/// underlying Layout. Layouts can't read `@Environment` directly, so this thin wrapper handles
+/// the bridging.
+private struct ToastBody<Content: View>: View {
+	@ViewBuilder var content: () -> Content
+	@Environment(\.boneToastLineCountTracker) private var tracker
+
+	var body: some View {
+		ToastBodyLayout(spacing: 8, textLineSpacing: 2, tracker: tracker) {
+			content()
+		}
+	}
+}
+
 /// Modifier that applies the appropriate background based on BoneToast.BackgroundStyle
 private struct ToastBackgroundModifier: ViewModifier {
 	let backgroundStyle: BoneToast.BackgroundStyle
@@ -1587,35 +1757,38 @@ public final class StandardToast: BoneToastType {
 	@MainActor
 	public var content: AnyView {
 		AnyView(
-			HStack(spacing: 8) {
-				if textConfig.alignment == .trailing || textConfig.alignment == .center {
-					Spacer(minLength: 0)
+			ToastBody {
+				if self.iconBuilder != nil || self.systemImage != nil {
+					self.iconView.toastBodyRole(.icon)
 				}
-				iconView
-				if actionButton != nil {
-					// Stretch the text's horizontal frame so that when the toast is granted more
-					// width than the text needs (e.g. multi-line subtitle wraps the toast to full
-					// width), the action button is pushed to the trailing edge instead of hugging
-					// the text. With an unspecified-width proposal (single-line case), this
-					// modifier does not affect intrinsic sizing — the toast still hugs content.
-					textView
-						.frame(maxWidth: .infinity, alignment: textConfig.alignment.frameAlignment)
-				} else {
-					textView
+
+				Text(self.textConfig.title)
+					.font(self.textConfig.titleFont.swiftUIFont)
+					.foregroundColor(self.titleColor)
+					.lineLimit(self.textConfig.effectiveTitleLineLimit)
+					.multilineTextAlignment(self.textConfig.alignment.textAlignment)
+					.toastBodyRole(.text)
+
+				if let subtitle = self.textConfig.subtitle {
+					Text(subtitle)
+						.font(self.textConfig.subtitleFont.swiftUIFont)
+						.foregroundColor(self.subtitleColor)
+						.lineLimit(self.textConfig.effectiveSubtitleLineLimit)
+						.multilineTextAlignment(self.textConfig.alignment.textAlignment)
+						.toastBodyRole(.text)
 				}
-				if let actionButton {
+
+				if let actionButton = self.actionButton {
 					ActionButtonView(
 						config: actionButton,
-						toastBackgroundStyle: backgroundStyle,
-						toastFontColor: titleColor,
+						toastBackgroundStyle: self.backgroundStyle,
+						toastFontColor: self.titleColor,
 						onDismiss: { [weak self] in self?.actionButtonTapped = true }
 					)
-				} else if textConfig.alignment == .leading || textConfig.alignment == .center {
-					// Only add trailing spacer when no action button
-					Spacer(minLength: 0)
+					.toastBodyRole(.button)
 				}
 			}
-				.toastPadding(contentPadding)
+				.toastPadding(self.contentPadding)
 		)
 	}
 	
