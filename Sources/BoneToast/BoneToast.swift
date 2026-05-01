@@ -44,6 +44,8 @@ public enum BoneToast {
 		public static func edges(top: CGFloat = 0, leading: CGFloat = 0, bottom: CGFloat = 0, trailing: CGFloat = 0) -> BoneToast.Padding {
 			.custom(EdgeInsets(top: top, leading: leading, bottom: bottom, trailing: trailing))
 		}
+
+		public static let defaultToastContent: BoneToast.Padding = .edges(top: 12, leading: 18, bottom: 12, trailing: 18)
 	}
 	
 	// MARK: - Font
@@ -1575,7 +1577,7 @@ public final class StandardToast: BoneToastType {
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
 		position: BoneToast.Position? = nil,
 		dismiss: BoneToast.StandardDismiss = .auto(),
-		contentPadding: BoneToast.Padding = .edges(top: 10, leading: 14, bottom: 10, trailing: 14),
+		contentPadding: BoneToast.Padding = .defaultToastContent,
 		edgePadding: BoneToast.Padding = .systemDefault,
 		cornerStyle: BoneToast.CornerStyle? = nil,
 		expandWidth: Bool = false,
@@ -1620,7 +1622,7 @@ public final class StandardToast: BoneToastType {
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
 		position: BoneToast.Position? = nil,
 		dismiss: BoneToast.StandardDismiss = .auto(),
-		contentPadding: BoneToast.Padding = .edges(top: 10, leading: 14, bottom: 10, trailing: 14),
+		contentPadding: BoneToast.Padding = .defaultToastContent,
 		edgePadding: BoneToast.Padding = .systemDefault,
 		cornerStyle: BoneToast.CornerStyle? = nil,
 		expandWidth: Bool = false,
@@ -1678,7 +1680,7 @@ public final class StandardToast: BoneToastType {
 		fontColor: Color? = nil,
 		position: BoneToast.Position? = nil,
 		dismiss: BoneToast.StandardDismiss = .auto(),
-		contentPadding: BoneToast.Padding = .edges(top: 10, leading: 14, bottom: 10, trailing: 14),
+		contentPadding: BoneToast.Padding = .defaultToastContent,
 		edgePadding: BoneToast.Padding = .systemDefault,
 		cornerStyle: BoneToast.CornerStyle? = nil,
 		expandWidth: Bool = false,
@@ -1731,7 +1733,7 @@ public final class StandardToast: BoneToastType {
 		fontColor: Color? = nil,
 		position: BoneToast.Position? = nil,
 		dismiss: BoneToast.StandardDismiss = .auto(),
-		contentPadding: BoneToast.Padding = .edges(top: 10, leading: 14, bottom: 10, trailing: 14),
+		contentPadding: BoneToast.Padding = .defaultToastContent,
 		edgePadding: BoneToast.Padding = .systemDefault,
 		cornerStyle: BoneToast.CornerStyle? = nil,
 		expandWidth: Bool = false,
@@ -2700,7 +2702,7 @@ public class CompletableToast: CompletableBoneToastType {
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
 		position: BoneToast.Position? = nil,
 		dismissDelayAfterCompletion: TimeInterval = 1.5,
-		contentPadding: BoneToast.Padding = .edges(top: 10, leading: 14, bottom: 10, trailing: 14),
+		contentPadding: BoneToast.Padding = .defaultToastContent,
 		edgePadding: BoneToast.Padding = .systemDefault,
 		cornerStyle: BoneToast.CornerStyle = .capsule,
 		expandWidth: Bool = false,
@@ -2777,7 +2779,7 @@ public class CompletableToast: CompletableBoneToastType {
 		success: SimplePhaseConfig = .disabled,
 		failure: SimplePhaseConfig = .disabled,
 		dismissDelayAfterCompletion: TimeInterval = 1.5,
-		contentPadding: BoneToast.Padding = .edges(top: 10, leading: 14, bottom: 10, trailing: 14),
+		contentPadding: BoneToast.Padding = .defaultToastContent,
 		edgePadding: BoneToast.Padding = .systemDefault,
 		cornerStyle: BoneToast.CornerStyle = .capsule,
 		expandWidth: Bool = false,
