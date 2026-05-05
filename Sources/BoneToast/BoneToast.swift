@@ -641,6 +641,24 @@ public enum BoneToast {
 					return animationProvider()
 			}
 		}
+
+		/// Approximate visible duration of this timing curve, in seconds.
+		///
+		/// Used by the async `dismiss` overloads on `BoneToastManager` to determine how
+		/// long to wait for an exit animation to play before returning. Spring-style
+		/// timings (`.bouncy`, `.spring`) are best-effort estimates of when the motion
+		/// has visually settled. For `.custom` the closure is opaque, so a conservative
+		/// fallback is used; callers can override with an explicit `delay:` argument.
+		public var estimatedDuration: TimeInterval {
+			switch self {
+				case .snappy: return 0.25
+				case .smooth: return 0.30
+				case .bouncy: return 0.40
+				case .spring(let response, _): return response * 2.5
+				case .easeInOut(let duration): return duration
+				case .custom: return 0.40
+			}
+		}
 		
 		public static func == (lhs: BoneToast.Timing, rhs: BoneToast.Timing) -> Bool {
 			switch (lhs, rhs) {
@@ -4305,10 +4323,53 @@ public final class BoneToastManager {
 	public static func dismiss(id: UUID) {
 		shared.dismiss(id: id)
 	}
-	
+
+	/// Dismisses a global toast and waits for its exit animation to finish before
+	/// returning, using the toast's effective timing's `estimatedDuration`.
+	/// Convenience for `BoneToastManager.shared.dismiss(id:)`.
+	public static func dismiss(id: UUID) async {
+		await shared.dismiss(id: id)
+	}
+
+	/// Dismisses a global toast and waits for its exit animation to finish before
+	/// returning. Convenience for `BoneToastManager.shared.dismiss(id:delay:)`.
+	///
+	/// - Parameters:
+	///   - id: The toast's ID.
+	///   - delay: Override for how long to wait, in seconds. Pass `nil` to wait for
+	///            the toast's effective timing's `estimatedDuration`. Pass `0` to
+	///            return immediately after kicking off the dismissal.
+	///
+	/// Note: `delay` is non-optional with no default to keep this overload's parameter
+	/// list strictly different from the sync `dismiss(id:)`, which avoids overload-
+	/// resolution ambiguity at call sites (especially across modules).
+	public static func dismiss(id: UUID, delay: TimeInterval?) async {
+		await shared.dismiss(id: id, delay: delay)
+	}
+
 	/// Dismisses all global toasts
 	public static func dismissAll() {
 		shared.dismissAll()
+	}
+
+	/// Dismisses all global toasts and waits for their exit animations to finish,
+	/// using the longest of the visible toasts' `estimatedDuration` values.
+	/// Convenience for `BoneToastManager.shared.dismissAll()`.
+	public static func dismissAll() async {
+		await shared.dismissAll()
+	}
+
+	/// Dismisses all global toasts and waits for their exit animations to finish.
+	/// Convenience for `BoneToastManager.shared.dismissAll(delay:)`.
+	///
+	/// - Parameter delay: Override for how long to wait, in seconds. Pass `nil` to
+	///   wait for the longest of the visible toasts' `estimatedDuration` values.
+	///   Pass `0` to return immediately after kicking off the dismissal.
+	///
+	/// Note: `delay` is non-optional with no default to keep this overload's parameter
+	/// list strictly different from the sync `dismissAll()`.
+	public static func dismissAll(delay: TimeInterval?) async {
+		await shared.dismissAll(delay: delay)
 	}
 	
 	// MARK: - Properties
@@ -4422,6 +4483,53 @@ public final class BoneToastManager {
 	
 	/// Dismisses a specific toast by ID
 	public func dismiss(id: UUID) {
+		performDismiss(id: id)
+	}
+
+	/// Dismisses a specific toast and waits for its exit animation to finish before
+	/// returning, using the toast's effective timing's `estimatedDuration`.
+	///
+	/// Equivalent to calling `dismiss(id:delay:)` with `delay: nil`. Use this when
+	/// the next thing you do (a modal presentation, a segue, etc.) would otherwise
+	/// interfere with the toast's exit transition.
+	public func dismiss(id: UUID) async {
+		await dismiss(id: id, delay: nil)
+	}
+
+	/// Dismisses a specific toast and waits for its exit animation to finish before
+	/// returning. Use this when the next thing you do (a modal presentation, a
+	/// segue, etc.) would otherwise interfere with the toast's exit transition.
+	///
+	/// - Parameters:
+	///   - id: The toast's ID.
+	///   - delay: Override for how long to wait, in seconds. Pass `nil` to wait for
+	///            the toast's effective timing's `estimatedDuration`. Pass `0` to
+	///            return immediately after kicking off the dismissal.
+	///
+	/// Note: `delay` is non-optional with no default to keep this overload's parameter
+	/// list strictly different from the sync `dismiss(id:)`, which avoids overload-
+	/// resolution ambiguity at call sites (especially across modules).
+	public func dismiss(id: UUID, delay: TimeInterval?) async {
+		let resolvedDelay: TimeInterval
+		if let delay {
+			resolvedDelay = delay
+		} else if let toast = toasts.first(where: { $0.id == id }) {
+			resolvedDelay = (toast.animationConfig?.timing ?? animationConfig.timing).estimatedDuration
+		} else {
+			// Toast already gone — nothing to wait for.
+			resolvedDelay = 0
+		}
+
+		performDismiss(id: id)
+
+		if resolvedDelay > 0 {
+			try? await Task.sleep(for: .seconds(resolvedDelay))
+		}
+	}
+
+	/// Synchronous dismissal body. Internal callers use this to avoid overload-resolution
+	/// ambiguity with `dismiss(id:delay:) async` from inside async contexts.
+	private func performDismiss(id: UUID) {
 		dismissTasks[id]?.cancel()
 		dismissTasks.removeValue(forKey: id)
 		observationTasks[id]?.cancel()
@@ -4431,17 +4539,59 @@ public final class BoneToastManager {
 		pausedToastIDs.remove(id)
 
 		let callback = dismissCallbacks.removeValue(forKey: id)
-		
+
 		withAnimation(animationConfig.timing.animation) {
 			toasts.removeAll { $0.id == id }
 		}
-		
+
 		// Call the dismiss callback after removing the toast
 		callback?()
 	}
-	
+
 	/// Dismisses all toasts
 	public func dismissAll() {
+		performDismissAll()
+	}
+
+	/// Dismisses all toasts and waits for their exit animations to finish, using
+	/// the longest of the visible toasts' `estimatedDuration` values.
+	///
+	/// Equivalent to calling `dismissAll(delay:)` with `delay: nil`.
+	public func dismissAll() async {
+		await dismissAll(delay: nil)
+	}
+
+	/// Dismisses all toasts and waits for their exit animations to finish.
+	///
+	/// - Parameter delay: Override for how long to wait, in seconds. Pass `nil` to
+	///   wait for the longest of the visible toasts' `estimatedDuration` values
+	///   so every exit animation has time to complete. Pass `0` to return
+	///   immediately after kicking off the dismissal.
+	///
+	/// Note: `delay` is non-optional with no default to keep this overload's parameter
+	/// list strictly different from the sync `dismissAll()`, which avoids overload-
+	/// resolution ambiguity at call sites (especially across modules).
+	public func dismissAll(delay: TimeInterval?) async {
+		let resolvedDelay: TimeInterval
+		if let delay {
+			resolvedDelay = delay
+		} else {
+			let managerDuration = animationConfig.timing.estimatedDuration
+			resolvedDelay = toasts.map {
+				($0.animationConfig?.timing ?? animationConfig.timing).estimatedDuration
+			}.max() ?? managerDuration
+		}
+
+		performDismissAll()
+
+		if resolvedDelay > 0 {
+			try? await Task.sleep(for: .seconds(resolvedDelay))
+		}
+	}
+
+	/// Synchronous dismiss-all body. Internal callers use this to avoid overload-resolution
+	/// ambiguity with `dismissAll(delay:) async` from inside async contexts.
+	private func performDismissAll() {
 		for (id, task) in dismissTasks {
 			task.cancel()
 			dismissTasks.removeValue(forKey: id)
@@ -4458,17 +4608,17 @@ public final class BoneToastManager {
 
 		let callbacks = dismissCallbacks
 		dismissCallbacks.removeAll()
-		
+
 		withAnimation(animationConfig.timing.animation) {
 			toasts.removeAll()
 		}
-		
+
 		// Call all dismiss callbacks
 		for callback in callbacks.values {
 			callback()
 		}
 	}
-	
+
 	/// Returns whether the manager has any toasts
 	public var isEmpty: Bool {
 		toasts.isEmpty
@@ -4487,7 +4637,7 @@ public final class BoneToastManager {
 						}
 						guard !Task.isCancelled else { return }
 						guard await self?.sleepPausable(seconds: delay, id: toast.id) == true else { return }
-						self?.dismiss(id: toast.id)
+						self?.performDismiss(id: toast.id)
 					}
 					actionButtonTasks[toast.id] = task
 				} else if toast.dismissDelayDependsOnRender {
@@ -4506,14 +4656,14 @@ public final class BoneToastManager {
 							resolvedDelay = delay
 						}
 						guard await self?.sleepPausable(seconds: resolvedDelay, id: toast.id) == true else { return }
-						self?.dismiss(id: toast.id)
+						self?.performDismiss(id: toast.id)
 					}
 					dismissTasks[toast.id] = task
 				} else {
 					// For regular toasts: start delay immediately
 					let task = Task { [weak self] in
 						guard await self?.sleepPausable(seconds: delay, id: toast.id) == true else { return }
-						self?.dismiss(id: toast.id)
+						self?.performDismiss(id: toast.id)
 					}
 					dismissTasks[toast.id] = task
 				}
@@ -4524,7 +4674,7 @@ public final class BoneToastManager {
 					while !Task.isCancelled {
 						if toast.isReadyToDismiss {
 							guard await self?.sleepPausable(seconds: delay, id: toast.id) == true else { return }
-							self?.dismiss(id: toast.id)
+							self?.performDismiss(id: toast.id)
 							return
 						}
 						try? await Task.sleep(for: .milliseconds(100))
