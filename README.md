@@ -15,6 +15,9 @@ A modern, protocol-based toast notification system for SwiftUI with support for 
 - **Configurable animations** - Preset configs (bounce, slide, scale, fade, pop, snappy) or custom
 - **Global & scoped toasts** - Window-based or overlay-based presentation
 - **Interactive dismissal** - Tap/swipe to dismiss with configurable behavior
+- **Pause-on-press** - Auto-dismiss timer pauses while the user holds a toast
+- **Background interaction control** - Optionally turn a toast into a lightweight modal that blocks taps outside it, with transparent or dimmed scrim
+- **Awaitable dismiss** - `async` dismiss APIs that wait for the exit animation, so follow-up modal presentations don't clobber the transition
 - **Subtitle support** - Optional subtitles with independent styling
 
 ## Quick Start
@@ -177,17 +180,23 @@ Indeterminate activity indicator with configurable indicator styles.
 | Style | Description |
 |-------|-------------|
 | `.standard` | Pulsing dots using `progress.indicator` with variableColor animation (default) |
-| `.network` | Rotating 90% filled circle, ideal for network operations |
-| `.custom(...)` | Custom symbol with configurable effect (variableColor, rotate, pulse, breathe, none) |
+| `.network(variableValue:rotateSpeed:)` | Rotating partial-fill circle, ideal for network operations. Both parameters are optional and default to internal sensible values |
+| `.custom(...)` | Custom symbol with configurable effect (variableColor, rotate, pulse, breathe, bounce, scale, wiggle, none) |
 
 ```swift
 // Standard pulsing indicator (default)
 let toast = BoneToastManager.show(ActivityToast("Processing..."))
 toast.complete(message: "Done!")
 
-// Network-style rotating indicator
-let toast = BoneToastManager.show(ActivityToast("Connecting...", style: .network))
+// Network-style rotating indicator (uses default fill / speed)
+let toast = BoneToastManager.show(ActivityToast("Connecting...", style: .network()))
 toast.complete(message: "Connected!")
+
+// Network-style with custom fill and rotation speed
+let toast = ActivityToast(
+    "Syncing…",
+    style: .network(variableValue: 0.5, rotateSpeed: 2.0)
+)
 
 // Custom indicator
 let toast = ActivityToast(
@@ -228,16 +237,19 @@ let toast = ActivityToast(
 
 // Convenience factory for network style
 let toast = ActivityToast.network("Fetching data...")
+
+// Convenience factory with custom network parameters
+let toast = ActivityToast.network("Fetching data...", variableValue: 0.5, rotateSpeed: 2.0)
 ```
 
 **ActivityIndicatorStyle.custom options:**
 
 ```swift
 .custom(
-    symbol: "arrow.clockwise",     // SF Symbol name
-    variableValue: 0.8,            // Optional variable fill (0.0-1.0)
-    weight: .semibold,             // Font weight (default: .semibold)
-    effect: .rotate(speed: 2.0)    // Animation effect
+    symbol: "arrow.clockwise",                    // SF Symbol name
+    variableValue: 0.8,                           // Optional variable fill (0.0-1.0)
+    font: .system(size: 16, weight: .semibold),  // Symbol font (default shown)
+    effect: .rotate(speed: 2.0)                   // Animation effect
 )
 
 // Available effects:
@@ -245,8 +257,13 @@ let toast = ActivityToast.network("Fetching data...")
 .rotate(speed:) // Continuous rotation (speed multiplier)
 .pulse          // Pulsing animation
 .breathe        // Breathing animation
+.bounce         // Bouncing animation
+.scale          // Scaling animation
+.wiggle         // Wiggle animation
 .none           // No animation (static)
 ```
+
+> **Note:** the `.custom` indicator's symbol styling parameter changed from `weight: SwiftUI.Font.Weight` to `font: SwiftUI.Font?`. Pass any `Font` (or `nil` to use the system default).
 
 ### CompletableToast (Base Class)
 
@@ -587,6 +604,57 @@ let blueStyle = baseStyle.withTint(.blue)
 
 ---
 
+## Background Interaction
+
+Toasts pass-through background touches by default — the rest of the app stays interactive while a toast is visible. Set `backgroundInteraction:` to turn a specific toast into a lightweight modal that blocks taps outside its frame, optionally with a dimmed scrim and/or tap-to-dismiss behavior.
+
+```swift
+// Block taps; invisible scrim; outside taps absorbed silently
+ActivityToast("Verifying access…", backgroundInteraction: .blocking)
+
+// Dimmed scrim, outside taps absorbed
+StandardToast("Saving…", dismiss: .manual, backgroundInteraction: .dimmed)
+
+// Transparent scrim; outside tap dismisses the toast
+StandardToast.warning("Discard changes?", backgroundInteraction: .dismissOnTap)
+
+// Dimmed scrim; outside tap dismisses the toast
+ActivityToast("Connecting…", backgroundInteraction: .dimmedDismissOnTap)
+
+// Custom — pick your own scrim and outside-tap behavior
+StandardToast(
+    "Custom modal toast",
+    backgroundInteraction: BoneToast.BackgroundInteraction(
+        scrim: .dimmed(opacity: 0.6),
+        outsideTap: .dismiss
+    )
+)
+```
+
+**`BoneToast.BackgroundInteraction` options:**
+
+| Property | Values | Default |
+|---|---|---|
+| `scrim` | `.transparent`, `.dimmed(opacity:)` | `.transparent` |
+| `outsideTap` | `.absorb`, `.dismiss` | `.absorb` |
+
+**Presets:**
+
+| Preset | Scrim | Outside tap |
+|---|---|---|
+| `.blocking` | transparent | absorb |
+| `.dimmed` | dimmed (0.35) | absorb |
+| `.dismissOnTap` | transparent | dismiss |
+| `.dimmedDismissOnTap` | dimmed (0.35) | dismiss |
+
+### Behavior notes
+
+- Background interaction is honored by **global presentation only** (`BoneToastManager` / `.globalToast`). Scoped toasts (`.scopedToastContainer`) don't have their own window and can't block touches outside their hosting view.
+- When several blocking toasts are visible at once, only the **most recently presented** one owns the scrim and outside-tap behavior. Dismissing it promotes the next blocker in the stack — scrims do *not* compound (two `.dimmed` blockers do not double the dimming).
+- Non-blocking toasts presented alongside a blocker remain individually tappable / dismissable on top of the scrim.
+
+---
+
 ## BoneToastManager
 
 ### Global Toasts
@@ -608,6 +676,49 @@ BoneToastManager.shared.pinning = .whenReadyOnly
 
 // Dismiss all
 BoneToastManager.dismissAll()
+```
+
+### Awaitable Dismiss
+
+Use the `async` dismiss overloads when you want to do something next that would otherwise interfere with the toast's exit animation — for example, presenting a modal `UIViewController`. The async forms wait for the exit animation to finish before returning.
+
+```swift
+// Auto-derives the wait from the toast's effective animation timing
+await BoneToastManager.shared.dismiss(id: toast.id)
+self.present(modal, animated: true)
+
+// Explicit override (e.g. for a `.custom` timing whose duration we can't infer)
+await BoneToastManager.shared.dismiss(id: toast.id, delay: 0.5)
+
+// Skip the wait entirely (equivalent to the synchronous form, but in an async context)
+await BoneToastManager.shared.dismiss(id: toast.id, delay: 0)
+
+// Same shape for dismissAll
+await BoneToastManager.shared.dismissAll()
+await BoneToastManager.shared.dismissAll(delay: nil)  // explicit auto
+```
+
+The auto-derived wait uses the toast's effective `BoneToast.Timing.estimatedDuration`:
+
+| Timing | Estimated duration |
+|---|---|
+| `.snappy` | 0.25s |
+| `.smooth` | 0.30s |
+| `.bouncy` | 0.40s |
+| `.spring(response, _)` | `response × 2.5` |
+| `.easeInOut(d)` | `d` |
+| `.custom` | 0.40s (opaque — pass an explicit `delay:` for accuracy) |
+
+Sync `dismiss(id:)` / `dismissAll()` remain unchanged for fire-and-forget use.
+
+### Pause-on-Press
+
+Toasts with auto-dismiss timers automatically pause their countdown while the user is pressing on them — release resumes it from where it left off. The manager exposes the same controls programmatically:
+
+```swift
+BoneToastManager.shared.pauseDismiss(id: toast.id)
+// …later
+BoneToastManager.shared.resumeDismiss(id: toast.id)
 ```
 
 ### Scoped Toasts
@@ -743,6 +854,7 @@ BoneToast uses consistent 8pt spacing between all elements:
 | `BoneToast.Position` | `.top` or `.bottom` |
 | `BoneToast.Phase` | `.pending`, `.active`, `.success`, `.failure` |
 | `BoneToast.BackgroundStyle` | `.glass` or `.solid` variants |
+| `BoneToast.BackgroundInteraction` | Optional modal-style touch blocking (scrim + outside-tap behavior) |
 | `BoneToast.CornerStyle` | `.capsule` or `.roundedRect` |
 | `BoneToast.Padding` | Content/edge padding |
 | `BoneToast.TextConfig` | Title/subtitle configuration |
@@ -770,8 +882,8 @@ BoneToast uses consistent 8pt spacing between all elements:
 | Style | Description |
 |-------|-------------|
 | `.standard` | Pulsing dots (`progress.indicator` with variableColor) |
-| `.network` | Rotating 90% filled circle |
-| `.custom(symbol:variableValue:weight:effect:)` | Custom symbol with configurable animation |
+| `.network(variableValue:rotateSpeed:)` | Rotating partial-fill circle, ideal for network operations (both params optional) |
+| `.custom(symbol:variableValue:font:effect:)` | Custom symbol with configurable animation |
 
 ### Phase Configuration
 
