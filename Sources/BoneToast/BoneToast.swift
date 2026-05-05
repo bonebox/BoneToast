@@ -3237,7 +3237,7 @@ public enum ActivityIndicatorStyle: Sendable {
 
 	/// Rotating partially-filled circle indicator.
 	/// The circle is 90% filled and rotates continuously. Best for network operations.
-	case network
+	case network(variableValue: Double? = nil, rotateSpeed: Double? = nil)
 
 	/// Custom indicator with user-defined symbol and styling.
 	/// - Parameters:
@@ -3245,7 +3245,7 @@ public enum ActivityIndicatorStyle: Sendable {
 	///   - variableValue: Optional variable value for SF Symbol fill (0.0-1.0)
 	///   - weight: Font weight for the symbol (default: .semibold)
 	///   - effect: The symbol effect to apply during active/pending phases
-	case custom(symbol: String, variableValue: Double? = nil, weight: SwiftUI.Font.Weight = .semibold, effect: ActivitySymbolEffect)
+	case custom(symbol: String, variableValue: Double? = nil, font: Font? = .system(size: 16, weight: .semibold), effect: ActivitySymbolEffect)
 
 	/// Symbol effects available for custom activity indicators
 	public enum ActivitySymbolEffect: Sendable, Equatable {
@@ -3257,6 +3257,12 @@ public enum ActivityIndicatorStyle: Sendable {
 		case pulse
 		/// Breathing animation
 		case breathe
+		/// Bouncing animation
+		case bounce
+		/// Scaling animation
+		case scale
+		/// Wiggle animation
+		case wiggle
 		/// No animation (static symbol)
 		case none
 
@@ -3406,7 +3412,7 @@ public final class ActivityToast: CompletableToast {
 				}
 				return (symbols, unifiedStyle)
 
-			case .network:
+			case .network(let variableValue, let rotateSpeed):
 				let symbols = ToastSymbols(
 					active: "circle",
 					pending: nil,
@@ -3414,7 +3420,7 @@ public final class ActivityToast: CompletableToast {
 					failure: resolvedFailureSymbol,
 					hasEffects: true,
 					replaceFallback: .downUp,
-					staticVariableValue: 0.9
+					staticVariableValue: variableValue ?? 0.33
 				)
 				let unifiedStyle = ToastUnifiedSymbolStyle(symbols: symbols) { image, phase, effectEnabled in
 					let styledImage = image
@@ -3425,7 +3431,7 @@ public final class ActivityToast: CompletableToast {
 					switch phase {
 						case .active, .pending:
 							AnyView(styledImage
-								.symbolEffect(.rotate, options: .repeat(.continuous).speed(2), isActive: effectEnabled))
+								.symbolEffect(.rotate, options: .repeat(.continuous).speed(rotateSpeed ?? 4), isActive: effectEnabled))
 						case .success:
 							AnyView(styledImage
 								.symbolEffect(.bounce, value: effectEnabled))
@@ -3435,7 +3441,7 @@ public final class ActivityToast: CompletableToast {
 				}
 				return (symbols, unifiedStyle)
 
-			case .custom(let symbol, let variableValue, let weight, let effect):
+			case .custom(let symbol, let variableValue, let font, let effect):
 				let symbols = ToastSymbols(
 					active: symbol,
 					pending: nil,
@@ -3447,7 +3453,7 @@ public final class ActivityToast: CompletableToast {
 				)
 				let unifiedStyle = ToastUnifiedSymbolStyle(symbols: symbols) { image, phase, effectEnabled in
 					let styledImage = image
-						.font(.system(size: 16, weight: weight))
+						.font(font)
 						.foregroundStyle(fontColor)
 						.symbolRenderingMode(.hierarchical)
 
@@ -3481,6 +3487,18 @@ public final class ActivityToast: CompletableToast {
 							AnyView(styledImage
 								.symbolEffect(.breathe, options: .repeat(.continuous), isActive: isActivePhase)
 								.symbolEffect(.bounce, value: phase == .success ? effectEnabled : false))
+						case .bounce:
+							AnyView(styledImage
+								.symbolEffect(.bounce, options: .repeat(.continuous), isActive: isActivePhase)
+								.symbolEffect(.bounce, value: phase == .success ? effectEnabled : false))
+						case .scale:
+							AnyView(styledImage
+								.symbolEffect(.scale, options: .repeat(.continuous), isActive: isActivePhase)
+								.symbolEffect(.bounce, value: phase == .success ? effectEnabled : false))
+						case .wiggle:
+							AnyView(styledImage
+								.symbolEffect(.wiggle, options: .repeat(.continuous), isActive: isActivePhase)
+								.symbolEffect(.bounce, value: phase == .success ? effectEnabled : false))
 						case .none:
 							AnyView(styledImage
 								.symbolEffect(.bounce, value: phase == .success ? effectEnabled : false))
@@ -3504,6 +3522,8 @@ public extension ActivityToast {
 	///
 	/// - Parameters:
 	///   - message: The message to display
+	///   - variableValue: The fill value for the network indicator circle
+	///   - rotateSpeed: How fast the indicator rotates
 	///   - backgroundStyle: Background style for the toast
 	///   - font: Font for the message
 	///   - fontColor: Color for text and icons
@@ -3515,6 +3535,8 @@ public extension ActivityToast {
 	///   - cornerStyle: Corner shape
 	static func network(
 		_ message: String,
+		variableValue: Double? = nil,
+		rotateSpeed: Double? = nil,
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
 		font: BoneToast.Font = .system(size: 16, weight: .semibold),
 		fontColor: Color? = nil,
@@ -3528,7 +3550,7 @@ public extension ActivityToast {
 	) -> ActivityToast {
 		ActivityToast(
 			message,
-			style: .network,
+			style: .network(variableValue: variableValue, rotateSpeed: rotateSpeed),
 			backgroundStyle: backgroundStyle,
 			font: font,
 			fontColor: fontColor,

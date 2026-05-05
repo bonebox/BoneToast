@@ -1017,7 +1017,7 @@ public struct BoneToastTestView: View {
 	private func startNetworkActivityToast() {
 		let toast = ActivityToast(
 			"Fetching data...",
-			style: .network,
+			style: .network(),
 			backgroundStyle: backgroundStyleOption.backgroundStyle(tintColor: .blue),
 			position: resolvedPosition(),
 			pendingConfig: ToastPhaseConfig(title: "Connecting...")
