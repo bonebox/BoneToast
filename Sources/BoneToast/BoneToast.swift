@@ -787,7 +787,64 @@ public enum BoneToast {
 			}
 		}
 	}
-	
+
+	// MARK: - Background Interaction
+
+	/// Controls how a toast handles touches outside its own frame.
+	///
+	/// When set on a toast, the toast window intercepts background touches instead of letting
+	/// them pass through to the underlying app — turning that toast into a lightweight modal.
+	/// `nil` (the default on every toast) preserves the standard pass-through behavior.
+	///
+	/// Only honored by global presentation (`BoneToastManager` / `.globalToast`); scoped
+	/// in-tree presentation does not have its own window and therefore can't block touches
+	/// outside its hosting view.
+	///
+	/// When multiple blocking toasts are visible simultaneously, the most recently added one
+	/// owns the scrim and outside-tap behavior — earlier blockers are still in the stack but
+	/// their style is not applied. Non-blocking toasts presented alongside a blocker remain
+	/// individually tappable / dismissable.
+	public struct BackgroundInteraction: Sendable, Equatable {
+
+		/// Visual treatment for the area outside the toast.
+		public enum Scrim: Sendable, Equatable {
+			/// Invisible scrim — taps are blocked but the underlying UI remains visible.
+			case transparent
+			/// Dimmed scrim with the given opacity (0...1). Defaults to 0.35.
+			case dimmed(opacity: Double = 0.35)
+		}
+
+		/// What happens when the user taps outside the toast.
+		public enum OutsideTap: Sendable, Equatable {
+			/// Outside taps are silently swallowed.
+			case absorb
+			/// Outside taps dismiss this toast.
+			case dismiss
+		}
+
+		public var scrim: Scrim
+		public var outsideTap: OutsideTap
+
+		public init(scrim: Scrim = .transparent, outsideTap: OutsideTap = .absorb) {
+			self.scrim = scrim
+			self.outsideTap = outsideTap
+		}
+
+		// MARK: Presets
+
+		/// Transparent scrim that silently absorbs background taps.
+		public static let blocking = BackgroundInteraction()
+
+		/// Dimmed scrim that silently absorbs background taps.
+		public static let dimmed = BackgroundInteraction(scrim: .dimmed())
+
+		/// Transparent scrim; tapping outside dismisses the toast.
+		public static let dismissOnTap = BackgroundInteraction(outsideTap: .dismiss)
+
+		/// Dimmed scrim; tapping outside dismisses the toast.
+		public static let dimmedDismissOnTap = BackgroundInteraction(scrim: .dimmed(), outsideTap: .dismiss)
+	}
+
 } // end BoneToast namespace
 
 // MARK: - View Extension
@@ -853,7 +910,13 @@ public protocol BoneToastType: AnyObject, Identifiable, Observable where ID == U
 	
 	/// Optional animation configuration for this toast. If nil, uses the manager's default.
 	var animationConfig: BoneToast.AnimationConfig? { get }
-	
+
+	/// Optional background-interaction policy. When non-nil, the toast window intercepts
+	/// touches outside the toast's frame (turning the toast into a lightweight modal).
+	/// `nil` (the default) preserves the normal pass-through behavior. Only applied when
+	/// the toast is presented through the global window (`BoneToastManager` / `.globalToast`).
+	var backgroundInteraction: BoneToast.BackgroundInteraction? { get }
+
 	/// Whether the content view includes its own background styling.
 	/// If true, the container will not apply an additional background.
 	var contentIncludesBackground: Bool { get }
@@ -865,6 +928,10 @@ public protocol BoneToastType: AnyObject, Identifiable, Observable where ID == U
 public extension BoneToastType {
 	/// Default implementation returns nil, meaning the manager's default will be used
 	var animationConfig: BoneToast.AnimationConfig? { nil }
+
+	/// Default implementation returns nil — toasts pass background touches through.
+	/// Opt in by overriding or setting via the toast's initializer.
+	var backgroundInteraction: BoneToast.BackgroundInteraction? { nil }
 
 	/// Default implementation returns false, meaning the container applies the background
 	var contentIncludesBackground: Bool { false }
@@ -1493,6 +1560,7 @@ public final class StandardToast: BoneToastType {
 	public let expandWidth: Bool
 	public let actionButton: BoneToast.ActionButton?
 	public let animationConfig: BoneToast.AnimationConfig?
+	public let backgroundInteraction: BoneToast.BackgroundInteraction?
 	private let iconBuilder: (@MainActor () -> AnyView)?
 	
 	/// Set to true when the action button is tapped (triggers dismiss behavior)
@@ -1569,6 +1637,7 @@ public final class StandardToast: BoneToastType {
 	///   - expandWidth: Whether to expand to full width
 	///   - actionButton: Optional action button on trailing edge
 	///   - animationConfig: Per-toast animation (uses manager default if nil)
+	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
 	public init(
 		text: BoneToast.TextConfig,
 		systemImage: String? = nil,
@@ -1582,7 +1651,8 @@ public final class StandardToast: BoneToastType {
 		cornerStyle: BoneToast.CornerStyle? = nil,
 		expandWidth: Bool = false,
 		actionButton: BoneToast.ActionButton? = nil,
-		animationConfig: BoneToast.AnimationConfig? = nil
+		animationConfig: BoneToast.AnimationConfig? = nil,
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
 	) {
 		self.textConfig = text
 		self.systemImage = systemImage
@@ -1597,6 +1667,7 @@ public final class StandardToast: BoneToastType {
 		self.expandWidth = expandWidth
 		self.actionButton = actionButton
 		self.animationConfig = animationConfig
+		self.backgroundInteraction = backgroundInteraction
 		self.iconBuilder = nil
 		// Default interactive based on dismiss behavior (manual/afterDelay = true, whenReady = false)
 		self.interactive = true
@@ -1616,6 +1687,7 @@ public final class StandardToast: BoneToastType {
 	///   - expandWidth: Whether to expand to full width
 	///   - actionButton: Optional action button on trailing edge
 	///   - animationConfig: Per-toast animation (uses manager default if nil)
+	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
 	public init<Icon: View>(
 		text: BoneToast.TextConfig,
 		@ViewBuilder icon: @escaping () -> Icon,
@@ -1627,7 +1699,8 @@ public final class StandardToast: BoneToastType {
 		cornerStyle: BoneToast.CornerStyle? = nil,
 		expandWidth: Bool = false,
 		actionButton: BoneToast.ActionButton? = nil,
-		animationConfig: BoneToast.AnimationConfig? = nil
+		animationConfig: BoneToast.AnimationConfig? = nil,
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
 	) {
 		self.textConfig = text
 		self.systemImage = nil
@@ -1642,6 +1715,7 @@ public final class StandardToast: BoneToastType {
 		self.expandWidth = expandWidth
 		self.actionButton = actionButton
 		self.animationConfig = animationConfig
+		self.backgroundInteraction = backgroundInteraction
 		self.iconBuilder = { AnyView(icon()) }
 		self.interactive = true
 	}
@@ -1670,6 +1744,7 @@ public final class StandardToast: BoneToastType {
 	///   - textAlignment: Text alignment within the toast
 	///   - actionButton: Optional action button on trailing edge
 	///   - animationConfig: Per-toast animation (uses manager default if nil)
+	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
 	public convenience init(
 		_ message: String,
 		systemImage: String? = nil,
@@ -1686,7 +1761,8 @@ public final class StandardToast: BoneToastType {
 		expandWidth: Bool = false,
 		textAlignment: BoneToast.TextAlignment = .leading,
 		actionButton: BoneToast.ActionButton? = nil,
-		animationConfig: BoneToast.AnimationConfig? = nil
+		animationConfig: BoneToast.AnimationConfig? = nil,
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
 	) {
 		self.init(
 			text: BoneToast.TextConfig(message, font: font, color: fontColor, alignment: textAlignment),
@@ -1701,7 +1777,8 @@ public final class StandardToast: BoneToastType {
 			cornerStyle: cornerStyle,
 			expandWidth: expandWidth,
 			actionButton: actionButton,
-			animationConfig: animationConfig
+			animationConfig: animationConfig,
+			backgroundInteraction: backgroundInteraction
 		)
 	}
 	
@@ -1725,6 +1802,7 @@ public final class StandardToast: BoneToastType {
 	///   - textAlignment: Text alignment within the toast
 	///   - actionButton: Optional action button on trailing edge
 	///   - animationConfig: Per-toast animation (uses manager default if nil)
+	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
 	public convenience init<Icon: View>(
 		_ message: String,
 		@ViewBuilder icon: @escaping () -> Icon,
@@ -1739,7 +1817,8 @@ public final class StandardToast: BoneToastType {
 		expandWidth: Bool = false,
 		textAlignment: BoneToast.TextAlignment = .leading,
 		actionButton: BoneToast.ActionButton? = nil,
-		animationConfig: BoneToast.AnimationConfig? = nil
+		animationConfig: BoneToast.AnimationConfig? = nil,
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
 	) {
 		self.init(
 			text: BoneToast.TextConfig(message, font: font, color: fontColor, alignment: textAlignment),
@@ -1752,7 +1831,8 @@ public final class StandardToast: BoneToastType {
 			cornerStyle: cornerStyle,
 			expandWidth: expandWidth,
 			actionButton: actionButton,
-			animationConfig: animationConfig
+			animationConfig: animationConfig,
+			backgroundInteraction: backgroundInteraction
 		)
 	}
 	
@@ -1832,43 +1912,47 @@ public final class StandardToast: BoneToastType {
 	
 	// MARK: - Static Factories
 	
-	public static func error(_ message: String, position: BoneToast.Position? = nil, dismiss: BoneToast.StandardDismiss = .auto()) -> StandardToast {
+	public static func error(_ message: String, position: BoneToast.Position? = nil, dismiss: BoneToast.StandardDismiss = .auto(), backgroundInteraction: BoneToast.BackgroundInteraction? = nil) -> StandardToast {
 		StandardToast(
 			message,
 			systemImage: "exclamationmark.triangle.fill",
 			backgroundStyle: BoneToast.BackgroundStyle.glass(tintColor: .red.opacity(0.8)),
 			position: position,
-			dismiss: dismiss
+			dismiss: dismiss,
+			backgroundInteraction: backgroundInteraction
 		)
 	}
-	
-	public static func success(_ message: String, position: BoneToast.Position? = nil, dismiss: BoneToast.StandardDismiss = .auto()) -> StandardToast {
+
+	public static func success(_ message: String, position: BoneToast.Position? = nil, dismiss: BoneToast.StandardDismiss = .auto(), backgroundInteraction: BoneToast.BackgroundInteraction? = nil) -> StandardToast {
 		StandardToast(
 			message,
 			systemImage: "checkmark.circle.fill",
 			backgroundStyle: BoneToast.BackgroundStyle.glass(tintColor: .green.opacity(0.8)),
 			position: position,
-			dismiss: dismiss
+			dismiss: dismiss,
+			backgroundInteraction: backgroundInteraction
 		)
 	}
-	
-	public static func warning(_ message: String, position: BoneToast.Position? = nil, dismiss: BoneToast.StandardDismiss = .auto()) -> StandardToast {
+
+	public static func warning(_ message: String, position: BoneToast.Position? = nil, dismiss: BoneToast.StandardDismiss = .auto(), backgroundInteraction: BoneToast.BackgroundInteraction? = nil) -> StandardToast {
 		StandardToast(
 			message,
 			systemImage: "exclamationmark.triangle.fill",
 			backgroundStyle: BoneToast.BackgroundStyle.glass(tintColor: .orange.opacity(0.8)),
 			position: position,
-			dismiss: dismiss
+			dismiss: dismiss,
+			backgroundInteraction: backgroundInteraction
 		)
 	}
-	
-	public static func info(_ message: String, position: BoneToast.Position? = nil, dismiss: BoneToast.StandardDismiss = .auto()) -> StandardToast {
+
+	public static func info(_ message: String, position: BoneToast.Position? = nil, dismiss: BoneToast.StandardDismiss = .auto(), backgroundInteraction: BoneToast.BackgroundInteraction? = nil) -> StandardToast {
 		StandardToast(
 			message,
 			systemImage: "info.circle.fill",
 			backgroundStyle: BoneToast.BackgroundStyle.glass(tintColor: .blue.opacity(0.8)),
 			position: position,
-			dismiss: dismiss
+			dismiss: dismiss,
+			backgroundInteraction: backgroundInteraction
 		)
 	}
 }
@@ -2497,7 +2581,8 @@ public class CompletableToast: CompletableBoneToastType {
 	public let expandWidth: Bool
 	public let actionButton: BoneToast.ActionButton?
 	public let animationConfig: BoneToast.AnimationConfig?
-	
+	public let backgroundInteraction: BoneToast.BackgroundInteraction?
+
 	/// Internal tracking of pending state
 	private var _isInPendingState: Bool
 	
@@ -2691,6 +2776,7 @@ public class CompletableToast: CompletableBoneToastType {
 	///   - expandWidth: Whether to expand to full width
 	///   - actionButton: Optional action button
 	///   - animationConfig: Per-toast animation configuration
+	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
 	public init(
 		text: BoneToast.TextConfig,
 		activeConfig: ToastPhaseConfig,
@@ -2707,7 +2793,8 @@ public class CompletableToast: CompletableBoneToastType {
 		cornerStyle: BoneToast.CornerStyle = .capsule,
 		expandWidth: Bool = false,
 		actionButton: BoneToast.ActionButton? = nil,
-		animationConfig: BoneToast.AnimationConfig? = nil
+		animationConfig: BoneToast.AnimationConfig? = nil,
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
 	) {
 		self.textConfig = text
 		self.activePhaseConfig = activeConfig
@@ -2728,6 +2815,7 @@ public class CompletableToast: CompletableBoneToastType {
 		self.expandWidth = expandWidth
 		self.actionButton = actionButton
 		self.animationConfig = animationConfig
+		self.backgroundInteraction = backgroundInteraction
 	}
 	
 	// MARK: - Convenience Initializers
@@ -2766,6 +2854,7 @@ public class CompletableToast: CompletableBoneToastType {
 	///   - cornerStyle: Corner shape
 	///   - expandWidth: Whether to expand to full width
 	///   - animationConfig: Per-toast animation configuration
+	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
 	public convenience init(
 		_ message: String,
 		subtitle: String? = nil,
@@ -2783,7 +2872,8 @@ public class CompletableToast: CompletableBoneToastType {
 		edgePadding: BoneToast.Padding = .systemDefault,
 		cornerStyle: BoneToast.CornerStyle = .capsule,
 		expandWidth: Bool = false,
-		animationConfig: BoneToast.AnimationConfig? = nil
+		animationConfig: BoneToast.AnimationConfig? = nil,
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
 	) {
 		let resolvedFontColor = fontColor ?? backgroundStyle.defaultFontColor
 		
@@ -2871,7 +2961,8 @@ public class CompletableToast: CompletableBoneToastType {
 			edgePadding: edgePadding,
 			cornerStyle: cornerStyle,
 			expandWidth: expandWidth,
-			animationConfig: animationConfig
+			animationConfig: animationConfig,
+			backgroundInteraction: backgroundInteraction
 		)
 	}
 	
@@ -3047,6 +3138,7 @@ public final class ProgressToast: CompletableToast {
 	///   - failureConfig: Custom failure phase config
 	///   - dismissDelayAfterCompletion: Delay before auto-dismiss
 	///   - cornerStyle: Corner shape
+	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
 	public init(
 		_ message: String,
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
@@ -3057,7 +3149,8 @@ public final class ProgressToast: CompletableToast {
 		successConfig: ToastPhaseConfig? = nil,
 		failureConfig: ToastPhaseConfig? = nil,
 		dismissDelayAfterCompletion: TimeInterval = 1.5,
-		cornerStyle: BoneToast.CornerStyle = .capsule
+		cornerStyle: BoneToast.CornerStyle = .capsule,
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
 	) {
 		let resolvedFontColor = fontColor ?? backgroundStyle.defaultFontColor
 		let hasPendingPhase = pendingConfig != nil
@@ -3110,7 +3203,8 @@ public final class ProgressToast: CompletableToast {
 			backgroundStyle: backgroundStyle,
 			position: position,
 			dismissDelayAfterCompletion: dismissDelayAfterCompletion,
-			cornerStyle: cornerStyle
+			cornerStyle: cornerStyle,
+			backgroundInteraction: backgroundInteraction
 		)
 	}
 }
@@ -3212,7 +3306,8 @@ public final class ActivityToast: CompletableToast {
 		successConfig: ToastPhaseConfig? = nil,
 		failureConfig: ToastPhaseConfig? = nil,
 		dismissDelayAfterCompletion: TimeInterval = 1.5,
-		cornerStyle: BoneToast.CornerStyle = .capsule
+		cornerStyle: BoneToast.CornerStyle = .capsule,
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
 	) {
 		let resolvedFontColor = fontColor ?? backgroundStyle.defaultFontColor
 
@@ -3253,7 +3348,8 @@ public final class ActivityToast: CompletableToast {
 			backgroundStyle: backgroundStyle,
 			position: position,
 			dismissDelayAfterCompletion: dismissDelayAfterCompletion,
-			cornerStyle: cornerStyle
+			cornerStyle: cornerStyle,
+			backgroundInteraction: backgroundInteraction
 		)
 	}
 
@@ -3409,7 +3505,8 @@ public extension ActivityToast {
 		successConfig: ToastPhaseConfig? = nil,
 		failureConfig: ToastPhaseConfig? = nil,
 		dismissDelayAfterCompletion: TimeInterval = 1.5,
-		cornerStyle: BoneToast.CornerStyle = .capsule
+		cornerStyle: BoneToast.CornerStyle = .capsule,
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
 	) -> ActivityToast {
 		ActivityToast(
 			message,
@@ -3422,7 +3519,8 @@ public extension ActivityToast {
 			successConfig: successConfig,
 			failureConfig: failureConfig,
 			dismissDelayAfterCompletion: dismissDelayAfterCompletion,
-			cornerStyle: cornerStyle
+			cornerStyle: cornerStyle,
+			backgroundInteraction: backgroundInteraction
 		)
 	}
 }
@@ -3851,9 +3949,15 @@ private final class GlobalToastWindowController {
 		toastWindow.windowLevel = .alert + 100 // Higher than regular alerts
 		toastWindow.backgroundColor = .clear
 		
-		let view = GlobalToastContainerView(manager: manager) { [weak self] frames in
-			self?.window?.interactiveRects = frames
-		}
+		let view = GlobalToastContainerView(
+			manager: manager,
+			onFramesChange: { [weak self] frames in
+				self?.window?.interactiveRects = frames
+			},
+			onBlockingChange: { [weak self] isBlocking in
+				self?.window?.blocksBackgroundTouches = isBlocking
+			}
+		)
 		let hosting = UIHostingController(rootView: view)
 		hosting.view.backgroundColor = .clear
 		hosting.view.frame = toastWindow.bounds
@@ -3871,18 +3975,27 @@ private final class GlobalToastWindowController {
 private struct GlobalToastContainerView: View {
 	let manager: BoneToastManager
 	let onFramesChange: ([CGRect]) -> Void
-	
+	let onBlockingChange: (Bool) -> Void
+
 	@State private var currentToastIDs: [UUID] = []
 	@State private var isReady = false
-	
+
 	private var topToasts: [any BoneToastType] {
 		guard isReady else { return [] }
 		return manager.toasts.filter { ($0.positionOverride ?? manager.defaultPosition) == .top }.sorted(pinning: manager.pinning, stackOrder: manager.stackOrder, for: .top)
 	}
-	
+
 	private var bottomToasts: [any BoneToastType] {
 		guard isReady else { return [] }
 		return manager.toasts.filter { ($0.positionOverride ?? manager.defaultPosition) == .bottom }.sorted(pinning: manager.pinning, stackOrder: manager.stackOrder, for: .bottom)
+	}
+
+	/// The toast that currently owns the background-blocking scrim (most recently added).
+	/// When multiple blocking toasts are visible, only this one's `backgroundInteraction`
+	/// is honored — so dimmed scrims do not stack/compound.
+	private var blockingToast: (any BoneToastType)? {
+		guard isReady else { return nil }
+		return manager.toasts.last { $0.backgroundInteraction != nil }
 	}
 	
 	/// Resolves position for a toast using the manager's default if not specified
@@ -3903,6 +4016,7 @@ private struct GlobalToastContainerView: View {
 	var body: some View {
 		let topList = topToasts
 		let bottomList = bottomToasts
+		let blocker = blockingToast
 		GeometryReader { outerGeometry in
 			let safeTop = outerGeometry.safeAreaInsets.top
 			let safeBottom = outerGeometry.safeAreaInsets.bottom
@@ -3913,7 +4027,14 @@ private struct GlobalToastContainerView: View {
 					.onChange(of: outerGeometry.size.width, initial: false) { _, newWidth in
 						manager.sceneWidth = newWidth
 					}
-				
+
+				// Background scrim — rendered behind toasts so non-blocking toasts
+				// remain individually tappable on top of it.
+				if let blocker, let interaction = blocker.backgroundInteraction {
+					scrim(for: interaction, owner: blocker)
+						.transition(.opacity)
+				}
+
 				// Top toasts
 				VStack(spacing: manager.toastSpacing) {
 					ForEach(Array(topList.enumerated()), id: \.element.id) { index, toast in
@@ -3971,6 +4092,9 @@ private struct GlobalToastContainerView: View {
 		.onPreferenceChange(ToastFramePreferenceKey.self) { frames in
 			onFramesChange(Array(frames.values))
 		}
+		.onChange(of: blocker?.id, initial: true) { _, _ in
+			onBlockingChange(blocker != nil)
+		}
 		.task {
 			// Small delay to ensure the view renders with empty state first,
 			// allowing the first toast to animate in properly
@@ -3981,6 +4105,26 @@ private struct GlobalToastContainerView: View {
 			await observeToastChanges()
 		}
 		.animation(manager.animationConfig.timing.animation, value: currentToastIDs)
+	}
+
+	@ViewBuilder
+	private func scrim(for interaction: BoneToast.BackgroundInteraction,
+					   owner: any BoneToastType) -> some View {
+		let fill: Color = {
+			switch interaction.scrim {
+				case .transparent: return Color.black.opacity(0.0001) // hit-testable, visually invisible
+				case .dimmed(let opacity): return Color.black.opacity(opacity)
+			}
+		}()
+		fill
+			.ignoresSafeArea()
+			.contentShape(Rectangle())
+			.onTapGesture {
+				if case .dismiss = interaction.outsideTap {
+					manager.dismiss(id: owner.id)
+				}
+			}
+			.accessibilityHidden(true)
 	}
 	
 	@MainActor
@@ -4691,8 +4835,16 @@ private class PassthroughWindow: UIWindow {
 	/// Rects (in window coordinates) where touches should be handled.
 	/// Touches outside these rects pass through to windows below.
 	var interactiveRects: [CGRect] = []
-	
+
+	/// When true, the window captures all touches inside its bounds — including outside
+	/// `interactiveRects` — so the SwiftUI scrim can absorb or route them. Set whenever a
+	/// toast with a non-nil `backgroundInteraction` is on screen.
+	var blocksBackgroundTouches: Bool = false
+
 	override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+		if blocksBackgroundTouches {
+			return super.hitTest(point, with: event)
+		}
 		// Check if point is within any interactive rect
 		for rect in interactiveRects {
 			if rect.contains(point) {
@@ -4702,7 +4854,7 @@ private class PassthroughWindow: UIWindow {
 		// Pass through touches outside interactive areas
 		return nil
 	}
-	
+
 	func updateInteractiveRect(id: AnyHashable, rect: CGRect?) {
 		// Simple implementation: just store the rect
 		// For multiple toasts, we'd need a dictionary, but for now just use array
