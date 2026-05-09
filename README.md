@@ -621,6 +621,13 @@ StandardToast.warning("Discard changes?", backgroundInteraction: .dismissOnTap)
 // Dimmed scrim; outside tap dismisses the toast
 ActivityToast("Connecting…", backgroundInteraction: .dimmedDismissOnTap)
 
+// Button-only — tap/swipe and auto-dismiss disabled; only the action button can dismiss
+StandardToast(
+    "Sign out of all devices?",
+    actionButton: BoneToast.ActionButton("Confirm") { signOut() },
+    backgroundInteraction: .buttonOnly
+)
+
 // Custom — pick your own scrim and outside-tap behavior
 StandardToast(
     "Custom modal toast",
@@ -637,21 +644,25 @@ StandardToast(
 |---|---|---|
 | `scrim` | `.transparent`, `.dimmed(opacity:)` | `.transparent` |
 | `outsideTap` | `.absorb`, `.dismiss` | `.absorb` |
+| `requiresAcknowledgment` | `Bool` — when `true`, suppresses tap/swipe dismissal and the auto-dismiss timer | `false` |
 
 **Presets:**
 
-| Preset | Scrim | Outside tap |
-|---|---|---|
-| `.blocking` | transparent | absorb |
-| `.dimmed` | dimmed (0.35) | absorb |
-| `.dismissOnTap` | transparent | dismiss |
-| `.dimmedDismissOnTap` | dimmed (0.35) | dismiss |
+| Preset | Scrim | Outside tap | Toast tap/swipe | Auto-dismiss |
+|---|---|---|---|---|
+| `.blocking` | transparent | absorb | enabled | per `dismiss:` |
+| `.dimmed` | dimmed (0.35) | absorb | enabled | per `dismiss:` |
+| `.dismissOnTap` | transparent | dismiss | enabled | per `dismiss:` |
+| `.dimmedDismissOnTap` | dimmed (0.35) | dismiss | enabled | per `dismiss:` |
+| `.buttonOnly` | transparent | absorb | **disabled** | **disabled** |
+| `.dimmedButtonOnly` | dimmed (0.35) | absorb | **disabled** | **disabled** |
 
 ### Behavior notes
 
 - Background interaction is honored by **global presentation only** (`BoneToastManager` / `.globalToast`). Scoped toasts (`.scopedToastContainer`) don't have their own window and can't block touches outside their hosting view.
 - When several blocking toasts are visible at once, only the **most recently presented** one owns the scrim and outside-tap behavior. Dismissing it promotes the next blocker in the stack — scrims do *not* compound (two `.dimmed` blockers do not double the dimming).
 - Non-blocking toasts presented alongside a blocker remain individually tappable / dismissable on top of the scrim.
+- `.buttonOnly` / `.dimmedButtonOnly` (or any custom config with `requiresAcknowledgment: true`) **must be paired with an action button** — otherwise the toast has no user-facing dismiss path and can only be removed via `BoneToastManager.dismiss(id:)`.
 
 ---
 

@@ -843,9 +843,20 @@ public enum BoneToast {
 		public var scrim: Scrim
 		public var outsideTap: OutsideTap
 
-		public init(scrim: Scrim = .transparent, outsideTap: OutsideTap = .absorb) {
+		/// When `true`, the toast itself cannot be dismissed by tap or swipe and its
+		/// auto-dismiss timer is suppressed — the action button (or programmatic
+		/// `dismiss(id:)`) becomes the only path out. Pair with an `actionButton` or
+		/// the toast can only be removed programmatically.
+		public var requiresAcknowledgment: Bool
+
+		public init(
+			scrim: Scrim = .transparent,
+			outsideTap: OutsideTap = .absorb,
+			requiresAcknowledgment: Bool = false
+		) {
 			self.scrim = scrim
 			self.outsideTap = outsideTap
+			self.requiresAcknowledgment = requiresAcknowledgment
 		}
 
 		// MARK: Presets
@@ -861,6 +872,14 @@ public enum BoneToast {
 
 		/// Dimmed scrim; tapping outside dismisses the toast.
 		public static let dimmedDismissOnTap = BackgroundInteraction(scrim: .dimmed(), outsideTap: .dismiss)
+
+		/// Transparent scrim; toast tap/swipe and auto-dismiss disabled. Only the
+		/// action button (or programmatic dismissal) can dismiss the toast.
+		public static let buttonOnly = BackgroundInteraction(requiresAcknowledgment: true)
+
+		/// Dimmed scrim; toast tap/swipe and auto-dismiss disabled. Only the action
+		/// button (or programmatic dismissal) can dismiss the toast.
+		public static let dimmedButtonOnly = BackgroundInteraction(scrim: .dimmed(), requiresAcknowledgment: true)
 	}
 
 } // end BoneToast namespace
@@ -1605,6 +1624,11 @@ public final class StandardToast: BoneToastType {
 	}
 
 	public var dismissBehavior: BoneToast.DismissBehavior {
+		// `requiresAcknowledgment` short-circuits to manual: no auto-dismiss timer,
+		// only the action button (or programmatic dismiss) can remove the toast.
+		if backgroundInteraction?.requiresAcknowledgment == true {
+			return .manual
+		}
 		switch dismissStyle {
 			case .auto(let delay):
 				// If action button is present and no explicit delay, use brief delay (0.2s) after button tap
@@ -1687,8 +1711,9 @@ public final class StandardToast: BoneToastType {
 		self.animationConfig = animationConfig
 		self.backgroundInteraction = backgroundInteraction
 		self.iconBuilder = nil
-		// Default interactive based on dismiss behavior (manual/afterDelay = true, whenReady = false)
-		self.interactive = true
+		// Default interactive based on dismiss behavior (manual/afterDelay = true, whenReady = false).
+		// `requiresAcknowledgment` forces it off so tap/swipe can't dismiss.
+		self.interactive = backgroundInteraction?.requiresAcknowledgment == true ? false : true
 	}
 	
 	/// Creates a standard toast with full text configuration and custom icon view.
@@ -1735,7 +1760,7 @@ public final class StandardToast: BoneToastType {
 		self.animationConfig = animationConfig
 		self.backgroundInteraction = backgroundInteraction
 		self.iconBuilder = { AnyView(icon()) }
-		self.interactive = true
+		self.interactive = backgroundInteraction?.requiresAcknowledgment == true ? false : true
 	}
 	
 	// MARK: - Convenience Initializers
@@ -2697,7 +2722,12 @@ public class CompletableToast: CompletableBoneToastType {
 	public var textAlignment: BoneToast.TextAlignment { textConfig.alignment }
 	
 	public var dismissBehavior: BoneToast.DismissBehavior {
-		.whenReady(delay: dismissDelayAfterCompletion)
+		// `requiresAcknowledgment` short-circuits to manual: only the action button
+		// (or programmatic dismiss) can remove the toast.
+		if backgroundInteraction?.requiresAcknowledgment == true {
+			return .manual
+		}
+		return .whenReady(delay: dismissDelayAfterCompletion)
 	}
 	
 	/// Whether the toast is ready to be dismissed. Override in subclasses for custom behavior.
