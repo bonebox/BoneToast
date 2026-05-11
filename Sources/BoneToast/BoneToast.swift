@@ -26,6 +26,9 @@ public enum BoneToast {
 	
 	public enum Padding: Equatable, Sendable {
 		case none
+		/// BoneToast's default content padding (12 vertical, 18 horizontal). When an action button
+		/// is present, the trailing inset is reduced so the button sits closer to the toast edge.
+		case `default`
 		case systemDefault
 		case custom(EdgeInsets)
 
@@ -44,8 +47,6 @@ public enum BoneToast {
 		public static func edges(top: CGFloat = 0, leading: CGFloat = 0, bottom: CGFloat = 0, trailing: CGFloat = 0) -> BoneToast.Padding {
 			.custom(EdgeInsets(top: top, leading: leading, bottom: bottom, trailing: trailing))
 		}
-
-		public static let defaultToastContent: BoneToast.Padding = .edges(top: 12, leading: 18, bottom: 12, trailing: 18)
 	}
 	
 	// MARK: - Font
@@ -944,11 +945,18 @@ public enum BoneToast {
 
 private extension View {
 	@ViewBuilder
-	func toastPadding(_ padding: BoneToast.Padding) -> some View {
+	func toastPadding(_ padding: BoneToast.Padding, hasActionButton: Bool = false) -> some View {
 		switch padding {
-			case .none: self
-			case .systemDefault: self.padding()
-			case .custom(let insets): self.padding(insets)
+			case .none:
+				self
+			case .default:
+				// Trailing inset is reduced when an action button is present so the button sits
+				// closer to the toast edge. Custom padding values are honored exactly as given.
+				self.padding(EdgeInsets(top: 12, leading: 18, bottom: 12, trailing: hasActionButton ? 8 : 18))
+			case .systemDefault:
+				self.padding()
+			case .custom(let insets):
+				self.padding(insets)
 		}
 	}
 }
@@ -1756,7 +1764,7 @@ public final class StandardToast: BoneToastType {
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
 		position: BoneToast.Position? = nil,
 		dismiss: BoneToast.StandardDismiss = .auto(),
-		contentPadding: BoneToast.Padding = .defaultToastContent,
+		contentPadding: BoneToast.Padding = .default,
 		edgePadding: BoneToast.Padding = .systemDefault,
 		cornerStyle: BoneToast.CornerStyle? = nil,
 		expandWidth: Bool = false,
@@ -1808,7 +1816,7 @@ public final class StandardToast: BoneToastType {
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
 		position: BoneToast.Position? = nil,
 		dismiss: BoneToast.StandardDismiss = .auto(),
-		contentPadding: BoneToast.Padding = .defaultToastContent,
+		contentPadding: BoneToast.Padding = .default,
 		edgePadding: BoneToast.Padding = .systemDefault,
 		cornerStyle: BoneToast.CornerStyle? = nil,
 		expandWidth: Bool = false,
@@ -1872,7 +1880,7 @@ public final class StandardToast: BoneToastType {
 		fontColor: Color? = nil,
 		position: BoneToast.Position? = nil,
 		dismiss: BoneToast.StandardDismiss = .auto(),
-		contentPadding: BoneToast.Padding = .defaultToastContent,
+		contentPadding: BoneToast.Padding = .default,
 		edgePadding: BoneToast.Padding = .systemDefault,
 		cornerStyle: BoneToast.CornerStyle? = nil,
 		expandWidth: Bool = false,
@@ -1931,7 +1939,7 @@ public final class StandardToast: BoneToastType {
 		fontColor: Color? = nil,
 		position: BoneToast.Position? = nil,
 		dismiss: BoneToast.StandardDismiss = .auto(),
-		contentPadding: BoneToast.Padding = .defaultToastContent,
+		contentPadding: BoneToast.Padding = .default,
 		edgePadding: BoneToast.Padding = .systemDefault,
 		cornerStyle: BoneToast.CornerStyle? = nil,
 		expandWidth: Bool = false,
@@ -1992,7 +2000,7 @@ public final class StandardToast: BoneToastType {
 					.toastBodyRole(.button)
 				}
 			}
-				.toastPadding(self.contentPadding)
+				.toastPadding(self.contentPadding, hasActionButton: self.actionButton != nil)
 		)
 	}
 	
@@ -2917,7 +2925,7 @@ public class CompletableToast: CompletableBoneToastType {
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
 		position: BoneToast.Position? = nil,
 		dismissDelayAfterCompletion: TimeInterval = 1.5,
-		contentPadding: BoneToast.Padding = .defaultToastContent,
+		contentPadding: BoneToast.Padding = .default,
 		edgePadding: BoneToast.Padding = .systemDefault,
 		cornerStyle: BoneToast.CornerStyle = .capsule,
 		expandWidth: Bool = false,
@@ -3000,7 +3008,7 @@ public class CompletableToast: CompletableBoneToastType {
 		success: SimplePhaseConfig = .disabled,
 		failure: SimplePhaseConfig = .disabled,
 		dismissDelayAfterCompletion: TimeInterval = 1.5,
-		contentPadding: BoneToast.Padding = .defaultToastContent,
+		contentPadding: BoneToast.Padding = .default,
 		edgePadding: BoneToast.Padding = .systemDefault,
 		cornerStyle: BoneToast.CornerStyle = .capsule,
 		expandWidth: Bool = false,
@@ -3722,7 +3730,7 @@ private struct CompletableToastContentView<Toast: CompletableBoneToastType>: Vie
 				)
 			}
 		}
-		.toastPadding(toast.contentPadding)
+		.toastPadding(toast.contentPadding, hasActionButton: hasActionButton)
 		.frame(minHeight: 44) // Minimum touch target height
 		.modifier(CompletableToastBackgroundModifier(toast: toast))
 		.geometryGroup() // Coordinates animations across children
@@ -4326,7 +4334,7 @@ private struct AnyToastViewForWindow: View {
 		switch toast.edgePadding {
 			case .none:
 				return EdgeInsets()
-			case .systemDefault:
+			case .default, .systemDefault:
 				return EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8)
 			case .custom(let insets):
 				return EdgeInsets(top: 0, leading: insets.leading, bottom: 0, trailing: insets.trailing)
@@ -4931,7 +4939,7 @@ private struct AnyToastView: View {
 		switch toast.edgePadding {
 			case .none:
 				return EdgeInsets()
-			case .systemDefault:
+			case .default, .systemDefault:
 				return EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8)
 			case .custom(let insets):
 				return EdgeInsets(top: 0, leading: insets.leading, bottom: 0, trailing: insets.trailing)
