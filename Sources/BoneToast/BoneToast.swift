@@ -882,6 +882,62 @@ public enum BoneToast {
 		public static let dimmedButtonOnly = BackgroundInteraction(scrim: .dimmed(), requiresAcknowledgment: true)
 	}
 
+	// MARK: - Uniqueness
+
+	/// Controls whether a toast should be treated as unique — preventing duplicate copies
+	/// of the "same" toast from coexisting on screen.
+	///
+	/// When set on a toast, `BoneToastManager` checks the existing toasts before showing
+	/// the new one. If a duplicate is found (per `match`), the configured `strategy`
+	/// decides whether the new toast is silently dropped (`.ignore`) or replaces the
+	/// existing one (`.replace`).
+	///
+	/// `nil` (the default on every toast) preserves the normal behavior — duplicates
+	/// are allowed.
+	public struct Uniqueness: Sendable, Equatable {
+
+		/// How two toasts are compared to determine if they're considered duplicates.
+		public enum Match: Sendable, Equatable {
+			/// Compare `title` only when the new toast has no subtitle; compare both
+			/// `title` and `subtitle` when a subtitle is present. The default — usually
+			/// what you want for content-based de-duplication.
+			case auto
+			/// Compare `textConfig.title` only.
+			case title
+			/// Compare both `textConfig.title` and `textConfig.subtitle`.
+			case titleAndSubtitle
+			/// Compare an explicit key. Symmetric: only matches existing toasts that
+			/// also use `.key(_)` with the same string value. Use when the toast text
+			/// isn't a meaningful identifier (or differs by call site but represents
+			/// the same logical event).
+			case key(String)
+		}
+
+		/// What to do when a duplicate toast is about to be shown.
+		public enum Strategy: Sendable, Equatable {
+			/// Keep the existing toast on screen; silently drop the new one.
+			case ignore
+			/// Dismiss the existing toast and show the new one in its place.
+			case replace
+		}
+
+		public let match: Match
+		public let strategy: Strategy
+
+		public init(match: Match = .auto, strategy: Strategy = .ignore) {
+			self.match = match
+			self.strategy = strategy
+		}
+
+		// MARK: Presets
+
+		/// Auto-match with `.ignore` strategy: keep the existing toast, drop duplicates.
+		public static let ignore = Uniqueness(strategy: .ignore)
+
+		/// Auto-match with `.replace` strategy: dismiss the existing toast and show the new one.
+		public static let replace = Uniqueness(strategy: .replace)
+	}
+
 } // end BoneToast namespace
 
 // MARK: - View Extension
@@ -954,6 +1010,12 @@ public protocol BoneToastType: AnyObject, Identifiable, Observable where ID == U
 	/// the toast is presented through the global window (`BoneToastManager` / `.globalToast`).
 	var backgroundInteraction: BoneToast.BackgroundInteraction? { get }
 
+	/// Optional uniqueness policy. When non-nil, `BoneToastManager` will check existing
+	/// toasts for a duplicate (per `uniqueness.match`) before showing this toast and
+	/// apply the configured strategy (`.ignore` to drop, `.replace` to swap in).
+	/// `nil` (the default) allows duplicates.
+	var uniqueness: BoneToast.Uniqueness? { get }
+
 	/// Whether the content view includes its own background styling.
 	/// If true, the container will not apply an additional background.
 	var contentIncludesBackground: Bool { get }
@@ -969,6 +1031,10 @@ public extension BoneToastType {
 	/// Default implementation returns nil — toasts pass background touches through.
 	/// Opt in by overriding or setting via the toast's initializer.
 	var backgroundInteraction: BoneToast.BackgroundInteraction? { nil }
+
+	/// Default implementation returns nil — duplicates are allowed.
+	/// Opt in by overriding or setting via the toast's initializer.
+	var uniqueness: BoneToast.Uniqueness? { nil }
 
 	/// Default implementation returns false, meaning the container applies the background
 	var contentIncludesBackground: Bool { false }
@@ -1598,8 +1664,9 @@ public final class StandardToast: BoneToastType {
 	public let actionButton: BoneToast.ActionButton?
 	public let animationConfig: BoneToast.AnimationConfig?
 	public let backgroundInteraction: BoneToast.BackgroundInteraction?
+	public let uniqueness: BoneToast.Uniqueness?
 	private let iconBuilder: (@MainActor () -> AnyView)?
-	
+
 	/// Set to true when the action button is tapped (triggers dismiss behavior)
 	public var actionButtonTapped: Bool = false
 
@@ -1680,6 +1747,7 @@ public final class StandardToast: BoneToastType {
 	///   - actionButton: Optional action button on trailing edge
 	///   - animationConfig: Per-toast animation (uses manager default if nil)
 	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
+	///   - uniqueness: When non-nil, the manager drops or replaces this toast if a duplicate is already on screen
 	public init(
 		text: BoneToast.TextConfig,
 		systemImage: String? = nil,
@@ -1694,7 +1762,8 @@ public final class StandardToast: BoneToastType {
 		expandWidth: Bool = false,
 		actionButton: BoneToast.ActionButton? = nil,
 		animationConfig: BoneToast.AnimationConfig? = nil,
-		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil,
+		uniqueness: BoneToast.Uniqueness? = nil
 	) {
 		self.textConfig = text
 		self.systemImage = systemImage
@@ -1710,6 +1779,7 @@ public final class StandardToast: BoneToastType {
 		self.actionButton = actionButton
 		self.animationConfig = animationConfig
 		self.backgroundInteraction = backgroundInteraction
+		self.uniqueness = uniqueness
 		self.iconBuilder = nil
 		// Default interactive based on dismiss behavior (manual/afterDelay = true, whenReady = false).
 		// `requiresAcknowledgment` forces it off so tap/swipe can't dismiss.
@@ -1731,6 +1801,7 @@ public final class StandardToast: BoneToastType {
 	///   - actionButton: Optional action button on trailing edge
 	///   - animationConfig: Per-toast animation (uses manager default if nil)
 	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
+	///   - uniqueness: When non-nil, the manager drops or replaces this toast if a duplicate is already on screen
 	public init<Icon: View>(
 		text: BoneToast.TextConfig,
 		@ViewBuilder icon: @escaping () -> Icon,
@@ -1743,7 +1814,8 @@ public final class StandardToast: BoneToastType {
 		expandWidth: Bool = false,
 		actionButton: BoneToast.ActionButton? = nil,
 		animationConfig: BoneToast.AnimationConfig? = nil,
-		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil,
+		uniqueness: BoneToast.Uniqueness? = nil
 	) {
 		self.textConfig = text
 		self.systemImage = nil
@@ -1759,6 +1831,7 @@ public final class StandardToast: BoneToastType {
 		self.actionButton = actionButton
 		self.animationConfig = animationConfig
 		self.backgroundInteraction = backgroundInteraction
+		self.uniqueness = uniqueness
 		self.iconBuilder = { AnyView(icon()) }
 		self.interactive = backgroundInteraction?.requiresAcknowledgment == true ? false : true
 	}
@@ -1788,6 +1861,7 @@ public final class StandardToast: BoneToastType {
 	///   - actionButton: Optional action button on trailing edge
 	///   - animationConfig: Per-toast animation (uses manager default if nil)
 	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
+	///   - uniqueness: When non-nil, the manager drops or replaces this toast if a duplicate is already on screen
 	public convenience init(
 		_ message: String,
 		systemImage: String? = nil,
@@ -1805,7 +1879,8 @@ public final class StandardToast: BoneToastType {
 		textAlignment: BoneToast.TextAlignment = .leading,
 		actionButton: BoneToast.ActionButton? = nil,
 		animationConfig: BoneToast.AnimationConfig? = nil,
-		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil,
+		uniqueness: BoneToast.Uniqueness? = nil
 	) {
 		self.init(
 			text: BoneToast.TextConfig(message, font: font, color: fontColor, alignment: textAlignment),
@@ -1821,7 +1896,8 @@ public final class StandardToast: BoneToastType {
 			expandWidth: expandWidth,
 			actionButton: actionButton,
 			animationConfig: animationConfig,
-			backgroundInteraction: backgroundInteraction
+			backgroundInteraction: backgroundInteraction,
+			uniqueness: uniqueness
 		)
 	}
 	
@@ -1846,6 +1922,7 @@ public final class StandardToast: BoneToastType {
 	///   - actionButton: Optional action button on trailing edge
 	///   - animationConfig: Per-toast animation (uses manager default if nil)
 	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
+	///   - uniqueness: When non-nil, the manager drops or replaces this toast if a duplicate is already on screen
 	public convenience init<Icon: View>(
 		_ message: String,
 		@ViewBuilder icon: @escaping () -> Icon,
@@ -1861,7 +1938,8 @@ public final class StandardToast: BoneToastType {
 		textAlignment: BoneToast.TextAlignment = .leading,
 		actionButton: BoneToast.ActionButton? = nil,
 		animationConfig: BoneToast.AnimationConfig? = nil,
-		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil,
+		uniqueness: BoneToast.Uniqueness? = nil
 	) {
 		self.init(
 			text: BoneToast.TextConfig(message, font: font, color: fontColor, alignment: textAlignment),
@@ -1875,7 +1953,8 @@ public final class StandardToast: BoneToastType {
 			expandWidth: expandWidth,
 			actionButton: actionButton,
 			animationConfig: animationConfig,
-			backgroundInteraction: backgroundInteraction
+			backgroundInteraction: backgroundInteraction,
+			uniqueness: uniqueness
 		)
 	}
 	
@@ -2625,6 +2704,7 @@ public class CompletableToast: CompletableBoneToastType {
 	public let actionButton: BoneToast.ActionButton?
 	public let animationConfig: BoneToast.AnimationConfig?
 	public let backgroundInteraction: BoneToast.BackgroundInteraction?
+	public let uniqueness: BoneToast.Uniqueness?
 
 	/// Internal tracking of pending state
 	private var _isInPendingState: Bool
@@ -2825,6 +2905,7 @@ public class CompletableToast: CompletableBoneToastType {
 	///   - actionButton: Optional action button
 	///   - animationConfig: Per-toast animation configuration
 	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
+	///   - uniqueness: When non-nil, the manager drops or replaces this toast if a duplicate is already on screen
 	public init(
 		text: BoneToast.TextConfig,
 		activeConfig: ToastPhaseConfig,
@@ -2842,7 +2923,8 @@ public class CompletableToast: CompletableBoneToastType {
 		expandWidth: Bool = false,
 		actionButton: BoneToast.ActionButton? = nil,
 		animationConfig: BoneToast.AnimationConfig? = nil,
-		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil,
+		uniqueness: BoneToast.Uniqueness? = nil
 	) {
 		self.textConfig = text
 		self.activePhaseConfig = activeConfig
@@ -2864,6 +2946,7 @@ public class CompletableToast: CompletableBoneToastType {
 		self.actionButton = actionButton
 		self.animationConfig = animationConfig
 		self.backgroundInteraction = backgroundInteraction
+		self.uniqueness = uniqueness
 	}
 	
 	// MARK: - Convenience Initializers
@@ -2903,6 +2986,7 @@ public class CompletableToast: CompletableBoneToastType {
 	///   - expandWidth: Whether to expand to full width
 	///   - animationConfig: Per-toast animation configuration
 	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
+	///   - uniqueness: When non-nil, the manager drops or replaces this toast if a duplicate is already on screen
 	public convenience init(
 		_ message: String,
 		subtitle: String? = nil,
@@ -2921,7 +3005,8 @@ public class CompletableToast: CompletableBoneToastType {
 		cornerStyle: BoneToast.CornerStyle = .capsule,
 		expandWidth: Bool = false,
 		animationConfig: BoneToast.AnimationConfig? = nil,
-		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil,
+		uniqueness: BoneToast.Uniqueness? = nil
 	) {
 		let resolvedFontColor = fontColor ?? backgroundStyle.defaultFontColor
 		
@@ -3010,12 +3095,13 @@ public class CompletableToast: CompletableBoneToastType {
 			cornerStyle: cornerStyle,
 			expandWidth: expandWidth,
 			animationConfig: animationConfig,
-			backgroundInteraction: backgroundInteraction
+			backgroundInteraction: backgroundInteraction,
+			uniqueness: uniqueness
 		)
 	}
-	
+
 	// MARK: - Content View
-	
+
 	@MainActor
 	public var content: AnyView {
 		AnyView(CompletableToastContentView(toast: self))
@@ -3187,6 +3273,7 @@ public final class ProgressToast: CompletableToast {
 	///   - dismissDelayAfterCompletion: Delay before auto-dismiss
 	///   - cornerStyle: Corner shape
 	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
+	///   - uniqueness: When non-nil, the manager drops or replaces this toast if a duplicate is already on screen
 	public init(
 		_ message: String,
 		backgroundStyle: BoneToast.BackgroundStyle = .glass,
@@ -3198,7 +3285,8 @@ public final class ProgressToast: CompletableToast {
 		failureConfig: ToastPhaseConfig? = nil,
 		dismissDelayAfterCompletion: TimeInterval = 1.5,
 		cornerStyle: BoneToast.CornerStyle = .capsule,
-		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil,
+		uniqueness: BoneToast.Uniqueness? = nil
 	) {
 		let resolvedFontColor = fontColor ?? backgroundStyle.defaultFontColor
 		let hasPendingPhase = pendingConfig != nil
@@ -3252,7 +3340,8 @@ public final class ProgressToast: CompletableToast {
 			position: position,
 			dismissDelayAfterCompletion: dismissDelayAfterCompletion,
 			cornerStyle: cornerStyle,
-			backgroundInteraction: backgroundInteraction
+			backgroundInteraction: backgroundInteraction,
+			uniqueness: uniqueness
 		)
 	}
 }
@@ -3349,6 +3438,8 @@ public final class ActivityToast: CompletableToast {
 	///   - failureConfig: Custom failure phase config
 	///   - dismissDelayAfterCompletion: Delay before auto-dismiss
 	///   - cornerStyle: Corner shape
+	///   - backgroundInteraction: When non-nil, blocks background touches while the toast is visible
+	///   - uniqueness: When non-nil, the manager drops or replaces this toast if a duplicate is already on screen
 	public init(
 		_ message: String,
 		style: ActivityIndicatorStyle = .standard,
@@ -3361,7 +3452,8 @@ public final class ActivityToast: CompletableToast {
 		failureConfig: ToastPhaseConfig? = nil,
 		dismissDelayAfterCompletion: TimeInterval = 1.5,
 		cornerStyle: BoneToast.CornerStyle = .capsule,
-		backgroundInteraction: BoneToast.BackgroundInteraction? = nil
+		backgroundInteraction: BoneToast.BackgroundInteraction? = nil,
+		uniqueness: BoneToast.Uniqueness? = nil
 	) {
 		let resolvedFontColor = fontColor ?? backgroundStyle.defaultFontColor
 
@@ -3403,7 +3495,8 @@ public final class ActivityToast: CompletableToast {
 			position: position,
 			dismissDelayAfterCompletion: dismissDelayAfterCompletion,
 			cornerStyle: cornerStyle,
-			backgroundInteraction: backgroundInteraction
+			backgroundInteraction: backgroundInteraction,
+			uniqueness: uniqueness
 		)
 	}
 
@@ -4514,6 +4607,19 @@ public final class BoneToastManager {
 	/// - Returns: The same toast instance for chaining or later reference
 	@discardableResult
 	public func show<T: BoneToastType>(_ toast: T, onDismiss: (@MainActor () -> Void)?) -> T {
+		// Uniqueness check: if this toast is marked unique and a duplicate is already on screen,
+		// apply the configured strategy (`.ignore` drops the new toast, `.replace` dismisses the
+		// existing one and proceeds with the normal append below).
+		if let uniqueness = toast.uniqueness,
+		   let existing = toasts.first(where: { Self.isUniquenessDuplicate(new: toast, existing: $0) }) {
+			switch uniqueness.strategy {
+				case .ignore:
+					return toast
+				case .replace:
+					performDismiss(id: existing.id)
+			}
+		}
+
 		// Auto-setup for global instance
 		if isGlobal && !isSetup {
 			setup()
@@ -4531,6 +4637,42 @@ public final class BoneToastManager {
 
 		setupDismissal(for: toast)
 		return toast
+	}
+
+	/// Compares a new toast against an existing one using the new toast's uniqueness policy.
+	/// Returns `true` when the two should be treated as duplicates.
+	///
+	/// `.title` and `.titleAndSubtitle` compare text content — the existing toast does not
+	/// need to be marked unique. `.key(_)` is symmetric — both sides must opt in with the
+	/// same key, otherwise an arbitrary string could collide with unrelated text-based toasts.
+	@MainActor
+	internal static func isUniquenessDuplicate(new: any BoneToastType, existing: any BoneToastType) -> Bool {
+		guard let policy = new.uniqueness else { return false }
+		if new.id == existing.id { return true }
+
+		let resolvedMatch: BoneToast.Uniqueness.Match
+		switch policy.match {
+			case .auto:
+				resolvedMatch = new.textConfig.subtitle != nil ? .titleAndSubtitle : .title
+			case .title, .titleAndSubtitle, .key:
+				resolvedMatch = policy.match
+		}
+
+		switch resolvedMatch {
+			case .auto:
+				return false // unreachable after resolution above
+			case .title:
+				return new.textConfig.title == existing.textConfig.title
+			case .titleAndSubtitle:
+				return new.textConfig.title == existing.textConfig.title
+					&& new.textConfig.subtitle == existing.textConfig.subtitle
+			case .key(let newKey):
+				guard let existingPolicy = existing.uniqueness,
+					  case .key(let existingKey) = existingPolicy.match else {
+					return false
+				}
+				return newKey == existingKey
+		}
 	}
 	
 	/// Dismisses a specific toast by ID

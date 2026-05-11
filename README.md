@@ -666,6 +666,64 @@ StandardToast(
 
 ---
 
+## Uniqueness
+
+Toasts allow duplicates by default — calling `show(_:)` twice with the same content stacks two toasts. Set `uniqueness:` on a toast to opt into de-duplication. When a duplicate is detected, the configured strategy decides whether to drop the new toast (`.ignore`) or swap out the existing one (`.replace`).
+
+```swift
+// Drop duplicates: if "Saved" is already on screen, the second call is a no-op.
+BoneToastManager.show(StandardToast("Saved", uniqueness: .ignore))
+
+// Replace duplicates: the new toast dismisses the older one and takes its place.
+BoneToastManager.show(StandardToast("Uploading…", uniqueness: .replace))
+
+// Explicit match mode + strategy.
+BoneToastManager.show(StandardToast(
+    text: BoneToast.TextConfig(title: "Sync error", subtitle: "Retrying in 5s"),
+    uniqueness: BoneToast.Uniqueness(match: .titleAndSubtitle, strategy: .replace)
+))
+
+// Match on an explicit key — useful when the visible text differs but the toast
+// represents the same logical event. Symmetric: only matches toasts that also
+// declare the same key.
+BoneToastManager.show(StandardToast(
+    "Network unavailable",
+    uniqueness: BoneToast.Uniqueness(match: .key("network"), strategy: .ignore)
+))
+```
+
+**`BoneToast.Uniqueness` options:**
+
+| Property | Values | Default |
+|---|---|---|
+| `match` | `.auto`, `.title`, `.titleAndSubtitle`, `.key(String)` | `.auto` |
+| `strategy` | `.ignore`, `.replace` | `.ignore` |
+
+**Match modes:**
+
+| Mode | Compares |
+|---|---|
+| `.auto` | Title only when the new toast has no subtitle; title + subtitle when it does. **Default.** |
+| `.title` | `textConfig.title` only — same title is always a duplicate, regardless of subtitle. |
+| `.titleAndSubtitle` | Both `textConfig.title` and `textConfig.subtitle`. |
+| `.key(String)` | Explicit key. **Symmetric** — only matches existing toasts that also use `.key(_)` with the same value. |
+
+**Presets:**
+
+| Preset | Match | Strategy |
+|---|---|---|
+| `.ignore` | `.auto` | `.ignore` |
+| `.replace` | `.auto` | `.replace` |
+
+### Behavior notes
+
+- Uniqueness is a property of the **new** toast — for `.title` / `.titleAndSubtitle`, the existing toast doesn't need to be marked unique itself. The new toast says "I shouldn't appear if a similar one is already here."
+- `.key(_)` is symmetric on purpose: requiring both sides to opt in prevents an arbitrary string from colliding with unrelated text-based toasts.
+- `.replace` dismisses the existing toast through the normal animated path, then appends the new one — there is a brief visual overlap during the exit/enter transitions.
+- The check runs in `BoneToastManager.show(_:)`, so it applies identically to global and scoped managers.
+
+---
+
 ## BoneToastManager
 
 ### Global Toasts

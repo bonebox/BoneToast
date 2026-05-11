@@ -162,3 +162,164 @@ struct DismissDelayTests {
 		#expect(toast.dismissDelayDependsOnRender == false)
 	}
 }
+
+@Suite("Uniqueness")
+@MainActor
+struct UniquenessTests {
+
+	private func makeManager() -> BoneToastManager {
+		BoneToastManager() // scoped instance — uses the same show/dismiss path as the global one
+	}
+
+	// MARK: - .ignore strategy
+
+	@Test("Unique toast with .ignore shows when no duplicate is present")
+	func ignoreShowsWhenNoDuplicate() {
+		let manager = makeManager()
+		manager.show(StandardToast("Hello", uniqueness: .ignore))
+		#expect(manager.toasts.count == 1)
+	}
+
+	@Test("Unique toast with .ignore is dropped when a title-matching duplicate exists")
+	func ignoreDropsTitleDuplicate() {
+		let manager = makeManager()
+		let first = StandardToast("Hello")
+		manager.show(first)
+		manager.show(StandardToast("Hello", uniqueness: .ignore))
+		#expect(manager.toasts.count == 1)
+		#expect(manager.toasts.first?.id == first.id) // existing toast retained
+	}
+
+	// MARK: - .replace strategy
+
+	@Test("Unique toast with .replace dismisses the existing duplicate and shows the new one")
+	func replaceSwapsDuplicate() {
+		let manager = makeManager()
+		let first = StandardToast("Hello")
+		manager.show(first)
+		let second = StandardToast("Hello", uniqueness: .replace)
+		manager.show(second)
+		#expect(manager.toasts.count == 1)
+		#expect(manager.toasts.first?.id == second.id) // new toast replaces existing
+	}
+
+	@Test("Unique toast with .replace appends normally when no duplicate exists")
+	func replaceAppendsWhenNoDuplicate() {
+		let manager = makeManager()
+		manager.show(StandardToast("Different message"))
+		let unique = StandardToast("New message", uniqueness: .replace)
+		manager.show(unique)
+		#expect(manager.toasts.count == 2)
+	}
+
+	// MARK: - .auto match resolution
+
+	@Test(".auto compares title only when no subtitle is set")
+	func autoUsesTitleWhenNoSubtitle() {
+		let manager = makeManager()
+		manager.show(StandardToast("Saved"))
+		// Auto resolves to .title since the new toast has no subtitle — collides with the first.
+		manager.show(StandardToast("Saved", uniqueness: .ignore))
+		#expect(manager.toasts.count == 1)
+	}
+
+	@Test(".auto compares title + subtitle when the new toast has a subtitle")
+	func autoUsesTitleAndSubtitleWhenSubtitlePresent() {
+		let manager = makeManager()
+		manager.show(StandardToast(text: BoneToast.TextConfig(title: "Saved", subtitle: "First copy")))
+		// Same title, different subtitle: .auto resolves to .titleAndSubtitle, so this is NOT a duplicate.
+		manager.show(StandardToast(
+			text: BoneToast.TextConfig(title: "Saved", subtitle: "Different copy"),
+			uniqueness: BoneToast.Uniqueness() // default match: .auto, strategy: .ignore
+		))
+		#expect(manager.toasts.count == 2)
+	}
+
+	@Test(".auto matches when both title and subtitle agree")
+	func autoMatchesWhenBothAgree() {
+		let manager = makeManager()
+		manager.show(StandardToast(text: BoneToast.TextConfig(title: "Saved", subtitle: "All set")))
+		manager.show(StandardToast(
+			text: BoneToast.TextConfig(title: "Saved", subtitle: "All set"),
+			uniqueness: .ignore
+		))
+		#expect(manager.toasts.count == 1)
+	}
+
+	// MARK: - Explicit .title / .titleAndSubtitle
+
+	@Test(".title matches across differing subtitles")
+	func titleIgnoresSubtitle() {
+		let manager = makeManager()
+		manager.show(StandardToast(text: BoneToast.TextConfig(title: "Saved", subtitle: "First")))
+		manager.show(StandardToast(
+			text: BoneToast.TextConfig(title: "Saved", subtitle: "Second"),
+			uniqueness: BoneToast.Uniqueness(match: .title, strategy: .ignore)
+		))
+		#expect(manager.toasts.count == 1)
+	}
+
+	@Test(".titleAndSubtitle differentiates toasts with same title and different subtitle")
+	func titleAndSubtitleDifferentiatesBySubtitle() {
+		let manager = makeManager()
+		manager.show(StandardToast(text: BoneToast.TextConfig(title: "Hello", subtitle: "A")))
+		manager.show(StandardToast(
+			text: BoneToast.TextConfig(title: "Hello", subtitle: "B"),
+			uniqueness: BoneToast.Uniqueness(match: .titleAndSubtitle, strategy: .ignore)
+		))
+		#expect(manager.toasts.count == 2)
+	}
+
+	// MARK: - .key symmetry
+
+	@Test(".key matches only when existing toast uses the same .key value")
+	func keyRequiresSymmetricOptIn() {
+		let manager = makeManager()
+		// Existing toast has matching title text but no .key — should NOT match a .key("auth") toast.
+		manager.show(StandardToast("Auth error"))
+		manager.show(StandardToast(
+			"Auth error",
+			uniqueness: BoneToast.Uniqueness(match: .key("auth"), strategy: .ignore)
+		))
+		#expect(manager.toasts.count == 2)
+	}
+
+	@Test(".key matches across different text when both sides use the same key")
+	func keyMatchesAcrossDifferentText() {
+		let manager = makeManager()
+		manager.show(StandardToast(
+			"First error",
+			uniqueness: BoneToast.Uniqueness(match: .key("auth"), strategy: .ignore)
+		))
+		manager.show(StandardToast(
+			"Different wording, same error",
+			uniqueness: BoneToast.Uniqueness(match: .key("auth"), strategy: .replace)
+		))
+		#expect(manager.toasts.count == 1)
+		#expect((manager.toasts.first as? StandardToast)?.textConfig.title == "Different wording, same error")
+	}
+
+	@Test(".key does not match different keys")
+	func differentKeysDoNotMatch() {
+		let manager = makeManager()
+		manager.show(StandardToast(
+			"First",
+			uniqueness: BoneToast.Uniqueness(match: .key("a"), strategy: .ignore)
+		))
+		manager.show(StandardToast(
+			"Second",
+			uniqueness: BoneToast.Uniqueness(match: .key("b"), strategy: .ignore)
+		))
+		#expect(manager.toasts.count == 2)
+	}
+
+	// MARK: - Default behavior
+
+	@Test("Non-unique toast coexists with anything")
+	func nonUniqueToastIgnoresCollisions() {
+		let manager = makeManager()
+		manager.show(StandardToast("Same"))
+		manager.show(StandardToast("Same")) // no uniqueness — duplicates allowed
+		#expect(manager.toasts.count == 2)
+	}
+}
