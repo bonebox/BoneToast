@@ -273,6 +273,12 @@ public enum BoneToast {
 		public let minWidth: CGFloat?
 		public let maxWidth: CGFloat?
 
+		/// Whether the button is brought closer to the toast's trailing edge.
+		/// Only applies when the toast's `contentPadding` is `.default`; custom padding is
+		/// always honored exactly. When `nil`, auto-resolves to `true` for toasts with a
+		/// single-line title and no subtitle, `false` otherwise.
+		public let hugsTrailingEdge: Bool?
+
 		// MARK: - Primary Initializer (ViewBuilder)
 
 		/// Creates an action button with custom content.
@@ -286,6 +292,8 @@ public enum BoneToast {
 		///   - contentPadding: Internal padding
 		///   - minWidth: Minimum button width (nil for no minimum)
 		///   - maxWidth: Maximum button width (nil for no maximum)
+		///   - hugsTrailingEdge: When non-nil, explicitly controls whether the button hugs
+		///     the toast's trailing edge. Only takes effect with `.default` content padding.
 		///   - content: Custom content view builder
 		public init<Content: View>(
 			action: @escaping @MainActor @Sendable () -> Void,
@@ -296,6 +304,7 @@ public enum BoneToast {
 			contentPadding: EdgeInsets = EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8),
 			minWidth: CGFloat? = 44,
 			maxWidth: CGFloat? = nil,
+			hugsTrailingEdge: Bool? = nil,
 			@ViewBuilder content: @escaping @MainActor () -> Content
 		) {
 			self.contentBuilder = { AnyView(content()) }
@@ -307,6 +316,7 @@ public enum BoneToast {
 			self.contentPadding = contentPadding
 			self.minWidth = minWidth
 			self.maxWidth = maxWidth
+			self.hugsTrailingEdge = hugsTrailingEdge
 		}
 
 		// MARK: - Convenience Initializer (Title String)
@@ -323,6 +333,8 @@ public enum BoneToast {
 		///   - contentPadding: Internal padding
 		///   - minWidth: Minimum button width
 		///   - maxWidth: Maximum button width
+		///   - hugsTrailingEdge: When non-nil, explicitly controls whether the button hugs
+		///     the toast's trailing edge. Only takes effect with `.default` content padding.
 		public init(
 			_ title: String,
 			action: @escaping @MainActor @Sendable () -> Void,
@@ -332,7 +344,8 @@ public enum BoneToast {
 			shape: BoneToast.ButtonShape = .capsule,
 			contentPadding: EdgeInsets = EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8),
 			minWidth: CGFloat? = 44,
-			maxWidth: CGFloat? = nil
+			maxWidth: CGFloat? = nil,
+			hugsTrailingEdge: Bool? = nil
 		) {
 			let resolvedFontColor = fontColor ?? .white
 			let resolvedFont = font
@@ -351,6 +364,7 @@ public enum BoneToast {
 			self.contentPadding = contentPadding
 			self.minWidth = minWidth
 			self.maxWidth = maxWidth
+			self.hugsTrailingEdge = hugsTrailingEdge
 		}
 
 		// MARK: - Convenience Initializer (SF Symbol)
@@ -368,6 +382,8 @@ public enum BoneToast {
 		///   - contentPadding: Internal padding (defaults to equal padding for circle)
 		///   - minWidth: Minimum button width (nil for icon buttons)
 		///   - maxWidth: Maximum button width
+		///   - hugsTrailingEdge: When non-nil, explicitly controls whether the button hugs
+		///     the toast's trailing edge. Only takes effect with `.default` content padding.
 		public init(
 			systemImage: String,
 			action: @escaping @MainActor @Sendable () -> Void,
@@ -378,7 +394,8 @@ public enum BoneToast {
 			shape: BoneToast.ButtonShape = .circle,
 			contentPadding: EdgeInsets = EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8),
 			minWidth: CGFloat? = nil,
-			maxWidth: CGFloat? = nil
+			maxWidth: CGFloat? = nil,
+			hugsTrailingEdge: Bool? = nil
 		) {
 			let resolvedFontColor = fontColor ?? .white
 			self.contentBuilder = {
@@ -396,6 +413,7 @@ public enum BoneToast {
 			self.contentPadding = contentPadding
 			self.minWidth = minWidth
 			self.maxWidth = maxWidth
+			self.hugsTrailingEdge = hugsTrailingEdge
 		}
 	}
 	
@@ -945,14 +963,15 @@ public enum BoneToast {
 
 private extension View {
 	@ViewBuilder
-	func toastPadding(_ padding: BoneToast.Padding, hasActionButton: Bool = false) -> some View {
+	func toastPadding(_ padding: BoneToast.Padding, hugsTrailingEdge: Bool = false) -> some View {
 		switch padding {
 			case .none:
 				self
 			case .default:
-				// Trailing inset is reduced when an action button is present so the button sits
-				// closer to the toast edge. Custom padding values are honored exactly as given.
-				self.padding(EdgeInsets(top: 12, leading: 18, bottom: 12, trailing: hasActionButton ? 8 : 18))
+				// Trailing inset is reduced when the trailing content should hug the toast edge
+				// (e.g. an action button with a single-line title). Other padding cases are
+				// honored exactly as the caller specified.
+				self.padding(EdgeInsets(top: 12, leading: 18, bottom: 12, trailing: hugsTrailingEdge ? 8 : 18))
 			case .systemDefault:
 				self.padding()
 			case .custom(let insets):
@@ -1688,6 +1707,15 @@ public final class StandardToast: BoneToastType {
 	/// Whether this toast has an action button
 	public var hasActionButton: Bool { actionButton != nil }
 
+	/// Resolved value for whether the action button should hug the toast's trailing edge.
+	/// Honors an explicit value on the button; otherwise auto-resolves to `true` only when
+	/// the title is single-line and there is no subtitle.
+	var resolvedHugsTrailingEdge: Bool {
+		guard let actionButton else { return false }
+		if let explicit = actionButton.hugsTrailingEdge { return explicit }
+		return textConfig.subtitle == nil && (measuredLineCount ?? 1) == 1
+	}
+
 	/// Resolved title color (uses backgroundStyle default if not specified)
 	public var titleColor: Color {
 		textConfig.titleColor ?? backgroundStyle.defaultFontColor
@@ -2000,7 +2028,7 @@ public final class StandardToast: BoneToastType {
 					.toastBodyRole(.button)
 				}
 			}
-				.toastPadding(self.contentPadding, hasActionButton: self.actionButton != nil)
+				.toastPadding(self.contentPadding, hugsTrailingEdge: self.resolvedHugsTrailingEdge)
 		)
 	}
 	
@@ -3730,7 +3758,7 @@ private struct CompletableToastContentView<Toast: CompletableBoneToastType>: Vie
 				)
 			}
 		}
-		.toastPadding(toast.contentPadding, hasActionButton: hasActionButton)
+		.toastPadding(toast.contentPadding, hugsTrailingEdge: toast.currentActionButton?.hugsTrailingEdge ?? hasActionButton)
 		.frame(minHeight: 44) // Minimum touch target height
 		.modifier(CompletableToastBackgroundModifier(toast: toast))
 		.geometryGroup() // Coordinates animations across children
